@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# drpawpaw - 2022
+
+# For the packages that Debian APT also provides source files,
+# this script downloads them into the APT packages dir.
+
+[ -z "$https_proxy" ] && echo -e "\nNOTE: No https_proxy ENV variable set"
+
+# From apt-get man page:
+# autoclean - Like clean, autoclean clears out the local repository of
+# retrieved package files. The difference is that it only removes package files
+# that can no longer be downloaded, and are largely useless. This allows a
+# cache to be maintained over a long period without it growing out of control.
+echo "$ sudo apt-get autoclean"
+sudo apt-get autoclean
+
+echo -e "\n$ cd /var/cache/apt/archives"
+if ! cd /var/cache/apt/archives
+then
+    echo -e "\nFailed to cd into APT packages directory"
+    exit 1
+fi
+
+IFS=$'\n'
+for package in $( ls -1 *.deb | cut -d '_' -f1 | sort -u )
+do
+   echo
+   sudo https_proxy="$https_proxy" apt-get source \
+             --no-install-recommends --only-source --download-only "$package"
+   sleep 1  # don't abuse free services
+done
+

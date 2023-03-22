@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# 2023 - drpawpaw
+
+# Lists files in compare_dir that are different from those in compare_to_dir.
+# "Different" includes files in compare_dir that are not in compare_to_dir.
+# "Files" does not inlculde sub-dirs of either compare_dir or compare_to_dir.
+# Files in compare_to_dir that are not in compare_dir are ignored.
+
+declare -r compare_dir="$1"
+declare -r compare_to_dir="$2"
+
+for dir_name in "$compare_dir" "$compare_to_dir"
+do
+    if [ ! -d "$dir_name" ] || \
+       [ ! -r "$dir_name" ] || \
+       [ ! -x "$dir_name" ]
+    then
+        echo -e "\n'$dir_name' must be a readable and listable directory"
+        exit 1
+    fi
+done
+
+cannot_access=""
+echo -e "\nDifferent:"
+for file_name in $( find "$compare_dir" -maxdepth 1 -type f )
+do
+    compare_to_file="${compare_to_dir}/${file_name##*/}"
+
+    if [ ! -f "$compare_to_file" ] || [ ! -r "$compare_to_file" ]
+    then
+        cannot_access="${cannot_access}\n$compare_to_file"
+    else
+        ! diff "$file_name" "$compare_to_file" &>/dev/null && echo "$file_name"
+    fi
+done
+
+[ -n "$cannot_access" ] && echo -e "\nCannot access: $cannot_access"
+

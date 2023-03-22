@@ -1,0 +1,50 @@
+#!/bin/dash
+
+# Author: drpawpaw - 2023
+
+# Prints to stdout a decently random NIC MAC address. Re-uses NIC's OUI.
+
+# Don't kid yourself that a NIC's MAC address is its only uniquely identifying
+# signal or behavior: https://en.wikipedia.org/wiki/MAC_address
+
+[ -z "$1" ] && { echo "\nUsage: $ ${0##*/} {alias of a NIC on this host}" >&2
+                 exit 1 ; }
+
+[ lo = "$1" ] && echo "\n$1 ha! ☺" >&2 && exit 1
+
+mac=$( ip link show |
+       egrep ": +$1 *:" -m1 -A5 |
+       tr ' ' '\n' |
+       egrep -i -A2 -m1 '^link/' |
+       egrep '^[a-f0-9]{2}:' )
+
+if [ 17 = "${#mac}" ] # EUI-48
+then
+    max_length=17
+    delim_length=15
+
+elif [ 23 = "${#mac}" ] # EUI-64
+then
+    max_length=21
+    delim_length=21
+else
+    echo "\nNo MAC address found for provided NIC" >&2
+    exit 1
+fi
+
+mac=$( echo "$mac" | egrep -o '^([a-f0-9]{2}:){3}' )  # Re-use OUI
+
+while [ ${#mac} -lt $max_length ]
+do
+    mac=${mac}$( shuf -e -n 1 \
+                      --random-source /dev/random \
+                      -- 0 1 2 3 4 5 6 7 8 9 0 a b c d e f  )
+    mac=${mac}$( shuf -e -n 1 \
+                      --random-source /dev/random \
+                      -- 0 1 2 3 4 5 6 7 8 9 0 a b c d e f  )
+
+    [ ${#mac} -lt $delim_length ] && mac=${mac}:
+done
+
+echo $mac
+

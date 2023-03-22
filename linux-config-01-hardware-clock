@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# Author: drpawpaw - 201?
+
+# Sets the computer's RTC/Hardware Clock.
+
+# This is the only linux-config* script that it's OK to run as root. As such
+# it does not call the linux-config-shared-utils script, not just because it
+# doesn't need anything provided by that script, but because that script
+# doesn't allow root to run it.
+
+SUDO=sudo
+[ "0" = "$(id -u)" ] && SUDO=""
+
+echo -e "\nFrom hwclock's man page:" \
+     "\n\nThe Hardware Clock is a clock that runs independently of any" \
+     "control program running in the CPU and even when the machine is" \
+     "powered off. The Hardware Clock is often called the real time clock," \
+     "the RTC, the BIOS clock, and the CMOS clock. Hardware Clock, in its" \
+     "capitalized form, was coined for use by hwclock because all of the" \
+     "other names are inappropriate to the point of being misleading. For" \
+     "example, some non-ISA systems have a few real time clocks with only" \
+     "one of them having its own power domain.\n\nThe system time is the" \
+     "time that matters. The Hardware Clock's basic purpose in a Linux" \
+     "system is to keep time when Linux is not running. You initialize the" \
+     "System Time to the time from the Hardware Clock when Linux starts up," \
+     "and then never use the Hardware Clock again. It is important that the" \
+     "System Time not have any discontinuities such as would happen if you" \
+     "used the 'date' program to set it while the system is running. You" \
+     "can, however, do whatever you want to the Hardware Clock while the" \
+     "system is running, and the next time Linux starts up, it will use" \
+     "the Hardware Clock's adjusted time to set System Time.\n\nhwclock sets" \
+     "the kernel timezone to the value indicated by TZ environment variable" \
+     "and/or /usr/share/zoneinfo (a directory) when you set the System Time" \
+     "using the --hctosys option. (This mean --hctosys sets the System" \
+     "Time FROM the Hardware Clock, AND sets a property of the Hardware" \
+     "Clock, also.)"
+
+echo -e "\nSetting the Hardware Clock:" \
+        "\n\nThis script sets only the Hardware Clock. If the System Time is" \
+        "really off you'll want to restart the system to set it to the" \
+        "Hardware Clock's value in a safe manner."
+echo
+echo "Current System Time (date):"
+date
+echo
+echo "Current Hardware Clock (hwclock --show):"
+$SUDO hwclock --show
+
+REPLY=""
+echo
+read -rp "Set the Hardware Clock? (y/n) "
+[ y != "$REPLY" ] && exit
+
+REPLY=""
+while [ 'h' != "$REPLY" ] && [ 'p' != "$REPLY" ]
+do
+    echo -e "\nNOTE: Must run this script under sudo to root to use SSH pull."
+    echo -e "\nSet hardware clock by hand or by pulling" \
+            "time from a host in ${SUDO_USER}'s .ssh/config file? (h/p) "
+    read -er
+done
+
+if [ 'h' = "$REPLY" ]
+then
+    while ! echo "$REPLY" | \
+        grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$' \
+                                                                  >&/dev/null
+    do
+        echo
+        echo "The value you provide must be with respect to the local time" \
+             "zone, even if the Hardware Clock is in Coordinated Universal" \
+             "Time."
+        echo
+        echo "It must be formatted like this: 2011-08-14 16:45:00"
+        echo
+        echo "Press <Enter> at the moment, as determined by another clock," \
+             "the time you provide arrives."
+        REPLY=""
+        echo
+        read -erp "Enter time to set: "
+    done
+
+elif [ 'p' = "$REPLY" ]
+then
+    if [ -z "$SUDO_USER" ]
+    then
+        echo -e "\nSUDO_USER not set. Must run this script under sudo to" \
+                "root to do an SSH time pull."
+        exit 1
+    fi
+
+    ssh_host=""
+    while [ -z "$ssh_host" ]
+    do
+        # TODO: Make setting of HOME dir much more bullet proof,
+        # and confirm .ssh/config exists before reading it.
+
+        echo -e "\nSelect as SSH server host to pull time from:"
+        select ssh_host in $( cat /home/$SUDO_USER/.ssh/config |
+                              egrep '^ *Host ' |
+                              sed -r 's/^ *//' |
+                              sed -r 's/   */ /g' |
+                              cut -f2 -d ' ' )
+        do
+            [ -n "$ssh_host" ] && break
+        done
+    done
+
+    # This simple algo returns a timestamp very close to the start a second.
+    # It ensures the system time on the reference SSH host is only micro
+    # seconds ahead of the time set on the target's hardware clock. If instead
+    # this algo just returned the current timestamp of the reference host, the
+    # time on the two hosts could be different by up to 1 second.
+    REPLY=$( sudo -u $SUDO_USER ssh $ssh_host '
+                        d1=$( date "+%Y-%m-%d %H:%M:%S" )
+                        d2=""
+                        while true
+                        do
+                            d2=$( date "+%Y-%m-%d %H:%M:%S" )
+                            [ "$d1" != "$d2" ] && break
+                        done
+                        echo "$d2"' )
+else
+    echo -e "\nFailed to choose by hand or ssh pull" >&2
+    exit 1
+fi
+
+echo
+$SUDO hwclock --set --date="$REPLY"
+echo
+$SUDO hwclock --show
+
+REPLY=""
+echo
+read -rp \
+"Restart the system to set System Time against updated Hardware Clock? (y/n) "
+if [ y = "$REPLY" ]
+then
+    $SUDO shutdown -r now
+fi
+

@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Opens the whois IP port for outbound packets to the arin server for the
+# SUDO_USER that calls this script. And creates a shell in which to use whois.
+# When that shell exits this script closes the iptables hole.
+
+# © 2020 drpawpaw - All Rights Reserved.
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details: http://www.gnu.org/licenses/
+
+
+declare -r WHOIS_SERVER='whois.arin.net'
+
+if [ 0 != $(id -u) ] || [ -z "$SUDO_USER" ]
+then
+    echo -e "\n${0##*/} only runs as sudo root.\n"
+    exit 1
+fi
+
+
+function cleanUp
+{
+    rm -f "$TF"
+    iptbls-hole -a c -d o -p t -P 43 -h "$WHOIS_SERVER"
+}
+
+
+userHome=$( cat /etc/passwd | grep -E "^$SUDO_USER:" | cut -d : -f6 )
+TF=$( sudo -u $SUDO_USER mktemp )
+echo ". $userHome/.bashrc"                                > "$TF"
+echo "PS1='\n$SUDO_USER ${0##*/} \$( pwd )\nwhois:43> '" >> "$TF"
+echo "echo -e '\033]2;'whois:43 ${0##*/}'\007'"          >> "$TF"
+echo "cd $PWD"                                           >> "$TF"
+echo "export WHOIS_OPTIONS=\"-h $WHOIS_SERVER\""         >> "$TF"
+echo "export WHOIS_SERVER=\"$WHOIS_SERVER\""             >> "$TF"
+echo "env | grep WHOIS"                                  >> "$TF"
+
+# Do NOT launch iptbls-hole as sudo, because if done AND this script is
+# also launched as sudo, then SUDO_USER within iptbls-hole is root!
+# It's unlikely anyone would ever want SUDO_USER=root.
+
+if ! iptbls-hole -a o -d o -p t -P 43 -h "$WHOIS_SERVER"
+then
+    echo -e "\niptbls-hole open hole call failed"
+    cleanUp
+    exit 1
+fi
+
+trap "iptbls-hole -a c -d o -p t -P 43 -h \"$WHOIS_SERVER\"" \
+                          SIGHUP SIGINT SIGQUIT SIGILL SIGABRT SIGFPE SIGTERM
+                         #  1      2       3      4       6      8      15
+
+sudo --login -u $SUDO_USER bash --rcfile "$TF"
+
+cleanUp
+

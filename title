@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Author: drpawpaw - 201?
+
+# Sets the title bar text (and icon text) of a desktop GUI application window
+# to the name of the application running in the window, followed by its first
+# call argument.
+
+# By far my majority use of this script is to title man page console windows,
+# for Alt-Tab'ing to one quickly when many are open. Near the bottom of my
+# .bashrc: alias man='title man'
+
+echo -e '\033]2;'$1 $2'\007'
+"$@"
+

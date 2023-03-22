@@ -1,0 +1,73 @@
+#!/bin/dash
+
+# Author: drpawpaw - 201?,2022
+
+# Cleans up mistakes or oversights in log rotations. All files (recursively)
+# below /var/log and /var/backups that are older than MAX_AGE_DAYS and have
+# size > 0 are nulled out, whenever this script runs as root. Place it in
+# /etc/cron.daily to run it once per day. This script's 'zzz' name prefix
+# (likely) ensures that it runs last among daily cron scripts, some of which
+# manage log files independently of logroate. Thus you want this to be the
+# last daily cron script.
+
+# 2022: Re-wrote a previous version from some years back that did something
+# similar but not as well.
+
+MAX_AGE_DAYS=21
+MAX_ZERO_DAYS=35
+IFS='
+'
+for f in $( find /var/log /var/backups -type f \
+                 -mtime +$MAX_AGE_DAYS -size +0 | sort )
+do
+    echo "$f" | egrep 'dpkg\.(diversions|statoverride|status)' \
+                                                   >/dev/null 2>&1 && continue
+    echo "$f" | egrep '(group|passwd|shadow)\.bak' >/dev/null 2>&1 && continue
+    echo "$f" | egrep 'apt\.extended_states' >/dev/null 2>&1 && continue
+
+    sts=$( stat -c '%s B : last mod %y' "$f" | sed -r 's/\.[0-9]+ +.*$//' )
+    logger -i -p cron.warning "${0##*/}: Nulling $f : $sts"
+
+    if echo "$f" | egrep '^/var/(log|backups)/' >/dev/null
+    then
+        # TODO: What if this log's just rarely used and it's
+        # being used this very instant? Choose a cmd line
+        # r/w file lock util to enclose these calls in.
+        shred -x -n 1 "$f"
+        cat /dev/null > "$f"
+    else
+        logger -i -p cron.err "${0##*/}: BIG error avoided: $f"
+        exit 1
+    fi
+done
+
+for f in $( find /var/log /var/backups -type f \
+                 -mtime +$MAX_ZERO_DAYS -size 0 | sort )
+do
+    sts=$( stat -c '%s B : last mod %y' "$f" | sed -r 's/\.[0-9]+ +.*$//' )
+    logger -i -p cron.warning "${0##*/}: Deleting $f : $sts"
+
+    if echo "$f" | egrep '^/var/(log|backups)/' >/dev/null
+    then
+        rm "$f"
+    else
+        logger -i -p cron.err "${0##*/}: BIG error avoided: $f"
+        exit 1
+    fi
+done
+
+no_logroate_script=""
+for l in $( find /var/log/ /var/backups/ -type f |
+            sed -r 's:^.*\/::' |
+            cut -f1 -d '.' |
+            sort -u )
+do
+    if ! egrep -R " *\/var\/.*$l" /etc/logrotate.d/* 2>/dev/null >/dev/null
+    then
+        no_logroate_script="${no_logroate_script}$l "
+    fi
+done
+
+[ -n "$no_logroate_script" ] && logger -i -p cron.warning \
+                             "${0##*/}: No rotate script: $no_logroate_script"
+

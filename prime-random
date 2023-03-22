@@ -1,0 +1,27 @@
+#!/bin/dash
+
+# Author: drpawpaw - 2023
+
+# Prints to stdout a decently random prime, 2 <= prime < 2^64, using only tools
+# likely available on every *nix host. This script is a toy so hesitate to use
+# it when a strong statistical random selection of primes is needed.
+
+# string_length( 2^64 base 10 ) == $( bc <<< "2^64" | wc -c ) == 21
+
+# To increase this algo's bias towards smaller primes add smaller integers
+# to shuf's input args. To maximize its bias towards larger primes set d=20.
+
+d=$( shuf -e -n 1 --random-source=/dev/random \
+          -- 11 12 13 14 15 15 17 18 19 20 )
+
+n=""
+while [ -z "$n" ]
+do
+    n=$( cat /dev/random |
+         tr -dc '[:digit:]' |
+         head -c $d |        # d == string_length( n )
+         sed -r 's/^0+//' )  # microscopic chance of stripping to empty string
+done
+
+factor $n | sed -r 's/.* //'        # print n's largest prime factor
+

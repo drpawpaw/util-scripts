@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Author: drpawpaw 201?
+
+# Creates a backup copy of a file in the file's dir, giving it the file's name
+# suffixed with the current time. User must have read access to the file and
+# write access to its dir.
+
+if [ ! -f "$1" ] || [ ! -r "$1" ]
+then
+    echo -e "\nUsage: $ ${0##*/} {readable file}\n" >&2
+    exit 1
+fi
+
+if grep -E '/' <<< "$1" &>/dev/null
+then
+    folder=${1%/*}
+else
+    folder='.'
+fi
+
+if [ ! -d "$folder" ] || [ ! -w "$folder" ]
+then
+    echo -e "\nUsage: $ ${0##*/} {readable file in writable dir}\n" >&2
+    exit 1
+fi
+
+original=${1##*/}
+
+cp -vp "$folder/$original" \
+       "$folder/$original."$( date +%F_%T | tr -d ':' ) >&2
+

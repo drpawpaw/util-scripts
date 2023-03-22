@@ -1,0 +1,37 @@
+#!/bin/dash
+
+# Author: drpawpaw - 201?
+
+# Decompresses stdin onto stdout when stdin's compression type is unknown,
+# including not compressed streams. It's not coded for extremely large inputs
+# or high performance. Mostly intended for light use on compressed HTML streams.
+
+# $ echo "Ipsum foobar dino Barney!" | gzip | unknown-uncompress | brotli | \
+# unknown-uncompress | unknown-uncompress
+# Ipsum foobar dino Barney!
+
+for d in brotli gunzip
+do
+    if ! which $d >/dev/null 2>&1
+    then
+        echo "${0##*/} depends on ${d}. Didn't find ${d}" >&2
+        exit 1
+    fi
+done
+
+cmprssdStrm=$( cat - | base64 )     # Do not store raw bytes in bash variables.
+
+# Gzip streams start with hex string '1f8b', which in base64 is 'H4sIA'.
+if [ H4sIA = "$( echo "$cmprssdStrm" | head --bytes 5 )" ]
+then
+    echo "$cmprssdStrm" | base64 -d | gunzip 2>/dev/null
+else
+    # brotli encodings do not start with file sig/magic bytes
+
+    for dcdr in "brotli -d" cat             # cat last for uncompressed inputs
+    do
+        echo "$cmprssdStrm" | base64 -d | $dcdr 2>/dev/null
+        [ 0 = $? ] && break
+    done
+fi
+

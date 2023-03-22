@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Author: drpawpaw - 2022
+
+# Captures the stream of a local video source (camera), produces a smaller
+# byte stream from it, and adds it to the list of video streams available on
+# the computer for applications to choose/use. A typical use is for outbound
+# video streams over slow or data-capped internet connections.
+
+declare -r VIDEO_LOW_BYTES="VideoLowBytes"
+declare -r LOOP="v4l2loopback"
+declare -r LOOP_SUFFIX=99
+
+echo -e "\n$ ls -l /sys/devices/virtual/video4linux/"
+ls -l /sys/devices/virtual/video4linux/
+
+# If v4l2loopback driver is already loaded, report this and do nothing else.
+
+echo -e "\n$ v4l2-ctl --list-devices | grep -A 2 '$VIDEO_LOW_BYTES'"
+if v4l2-ctl --list-devices | grep -A 2 "$VIDEO_LOW_BYTES"
+then
+    echo "Kernel module $LOOP $VIDEO_LOW_BYTES already loaded"
+else
+    echo -e "\nLoading kernel module $LOOP." \
+            "You may be prompted for root password"
+
+    echo -e "\n$ sudo modprobe v4l2loopback video_nr=99" \
+                                           "card_label=\"$VIDEO_LOW_BYTES\"" \
+                                           "exclusive_caps=1"
+    sudo modprobe v4l2loopback video_nr=$LOOP_SUFFIX \
+                               card_label="$VIDEO_LOW_BYTES" \
+                               exclusive_caps=1
+
+    echo -e "\n$ ls -l /sys/devices/virtual/video4linux/"
+    ls -l /sys/devices/virtual/video4linux/
+
+    echo -e "\n$ v4l2-ctl --list-devices | grep -A 2 '$VIDEO_LOW_BYTES'"
+    v4l2-ctl --list-devices | grep -A 2 "$VIDEO_LOW_BYTES"
+fi
+
+
+# Prompt the user with legit existing non-v4l2loopback
+# video streams to add a small-stream virtual on to.
+
+declare -r dev_videos_all=$( v4l2-ctl --list-devices | \
+                             grep -v "/dev/video${LOOP_SUFFIX}" | \
+                             grep '/dev/' | \
+                             tr  -d ' \t' |
+                             sort )
+dev_videos_usable=""
+IFS_OLD="$IFS"
+IFS=$'\n'
+for dev_vid in $dev_videos_all
+do
+    dimensions=$( v4l2-ctl --device="$dev_vid" --all |
+                  egrep 'Width\/Height' |
+                  tr -d ' \t' |
+                  cut -f2 -d ':' |
+                  tr '/' 'x' )
+
+    model=$(      v4l2-ctl --device="$dev_vid" --all |
+                  egrep 'Model' |
+                  tr -d '\t' |
+                  cut -f2 -d ':' |
+                  sed -r 's/^  *//' | # TODO: If these 2 lines are correct,
+                  sed -r 's/  *$//' ) # then the 1st one's redundant. Find out
+                                      # what's going on. If both are correct,
+                                      # delete the 1st, else fix them.
+
+    [ -z "$dimensions" ] || [ -z "$model" ] && continue
+
+    #echo "model: $model"
+    #echo "dimensions: $dimensions"
+
+    # Must reduce height and width by a % that evenly divides both the original
+    # height and width, else ffmpeg produces a distorted unusable image. We
+    # use factor 2. Thus, confirm both width and height are ( pixels mod 2 = 0 )
+    if [ '0' != $(( $( cut -f1 -d 'x' <<< $dimensions ) % 2  )) ] || \
+       [ '0' != $(( $( cut -f2 -d 'x' <<< $dimensions ) % 2  )) ]
+    then
+        continue
+    fi
+
+    echo -e "\n$ v4l2-ctl --device=\"$dev_vid\" --all"
+    v4l2-ctl --device="$dev_vid" --all
+
+    dev_videos_usable="${dev_videos_usable}$dev_vid : $model : ${dimensions};"
+done
+
+#echo "dev_videos_usable: $dev_videos_usable"
+
+echo -e "\nSelect which video stream to reduce onto $LOOP $VIDEO_LOW_BYTES:"
+dev_vid=""
+IFS=';'
+select dev_vid in $dev_videos_usable
+do
+    break;
+done
+IFS="$OLD_IFS"
+
+if [ -z "$dev_vid" ]
+then
+    echo -e "\nNo video device selected"
+    exit 1
+fi
+
+if ps -ef | grep "ffmpeg" | \
+            grep $( cut -f1 -d ':' <<< "$dev_vid" | tr -d ' \t' ) | \
+            grep "/dev/video$LOOP_SUFFIX"
+then
+    echo -e "\nA video stream on /dev/video$LOOP_SUFFIX from source" \
+            "'$dev_vid' is already running.\nStop the capture of it by all" \
+            "applications doing so, and kill its ffmpeg process before" \
+            "running this script again."
+    exit 1
+fi
+
+dimensions=$( cut -f3 -d ':' <<< "$dev_vid" | tr -d ' \t' )
+declare -r width_camera=$( cut  -f1 -d 'x' <<< $dimensions )
+declare -r height_camera=$( cut -f2 -d 'x' <<< $dimensions )
+
+#echo "dimensions: $dimensions"
+#echo "width_camera: $width_camera"
+#echo "height_camera: $height_camera"
+
+print_pretty=false
+which bc &>/dev/null && print_pretty=true
+
+#declare -r denom=12 # If all the numerators below end up as allowed, change
+                     # denom to something like 12 to test the math below, that
+                     # is, to produce an allowed percentages list shorter than
+                     # the "for n in ..." numerators list.
+declare -r denom=16
+allowed_numerators=""
+reducable_percentages=""
+IFS_OLD="$IFS"
+IFS=';'
+for numer in 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+do
+    width_reduced=$(( $width_camera * $numer / $denom ))  # C-lang modulo div
+    [ "$width_camera" != $(( $width_reduced * $denom / $numer )) ] && continue
+
+    height_reduced=$(( $height_camera * $numer / $denom ))
+    [ "$height_camera" != $(( $height_reduced * $denom / $numer )) ] && \
+                                                                       continue
+
+    allowed_nom_reductions="${allowed_numerators}$numer;"
+
+    reducable_percentages="${reducable_percentages}${numer}/${denom}"
+    if [ $print_pretty ]
+    then
+         percent_pretty=$( echo "scale=2; $numer / $denom * 100" | bc -l )
+         reducable_percentages="${reducable_percentages} : ${percent_pretty}%"
+    fi
+
+    reducable_percentages="${reducable_percentages};"
+done
+
+#echo "allowed_numerators: $allowed_numerators"
+#echo "reducable_percentages: $reducable_percentages"
+
+echo -e "\nSelect fraction/percentage of width and height" \
+        "of$( cut -f2,3 -d ':' <<< $dev_vid )" \
+        "to make available on $LOOP $VIDEO_LOW_BYTES:"
+select reduction_percent in $reducable_percentages
+do
+    break;
+done
+IFS="$OLD_IFS"
+
+if [ -z "$reduction_percent" ]
+then
+    echo -e "\nNo reduction % selected. Exiting"
+fi
+
+#echo "reduction_percent: $reduction_percent"
+
+numer=$( cut -f1 -d '/' <<< "$reduction_percent" | tr -d " \n" )
+width_reduced=$((  $width_camera  * $numer / $denom ))
+height_reduced=$(( $height_camera * $numer / $denom ))
+
+dev_vid=$( cut -f1 -d ':' <<< "$dev_vid" | tr -d ' \n' )
+
+echo -e "\n$ ffmpeg -i $dev_vid" \
+        "-f v4l2 -codec:v rawvideo"  \
+        "-vf scale=$width_reduced:$height_reduced" \
+        "/dev/video$LOOP_SUFFIX"
+
+# No sudo on ffmpeg v4l2 calls
+ffmpeg -i $dev_vid \
+       -f v4l2 -codec:v rawvideo \
+       -vf scale=$width_reduced:$height_reduced \
+       /dev/video$LOOP_SUFFIX
+

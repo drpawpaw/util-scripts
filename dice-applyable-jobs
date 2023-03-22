@@ -1,0 +1,682 @@
+#!/bin/bash
+
+# Author: drpawpaw - 2023
+
+# Wrote this middle of February, 2023 to
+#   - automate some of the tracking of employment search activities
+#   - speed up the repetitive portions of the process, where possible
+#   - simplify and reduce typos in opportunity-specific cover creation
+
+# I'm guessing 75+% of it will convert as-is to other employment search sites.
+
+
+for d in code-samples-gen wmctrl xvkbd
+do
+    if ! which $d >/dev/null 2>&1
+    then
+        echo "${0##*/} depends on ${d}. Didn't find ${d}" >&2
+        exit 1
+    fi
+done
+
+
+printUsage ()
+{
+    echo -e "\nUsage: $ ${0##*/} {your name} {opp search results html file}"
+    exit 1
+}
+
+declare -r user_name="$1"
+declare -r search_html_file="$2"
+
+[ -z "$user_name" ] && printUsage
+[ ! -f "$search_html_file" ] || [ ! -r "$search_html_file" ] && printUsage
+
+
+if ! ps -ef | egrep -im 1 \
+       "^$(whoami).*chromium.* --user-data-dir=.*chrome-runner/dice( |$)" \
+                                                                   &>/dev/null
+then
+    echo -e "\nNo Chrome instance running as '$(whoami)' with Dice" \
+            "config. Start one, log in to Dice, re-start this script."
+    exit 1
+fi
+
+echo -e "\nSelect the Dice Chrome window to use:\n"
+IFS=$'\n'
+select diceChromeX in $( wmctrl -l | egrep -i ' - Chromium' )
+do
+    [ -n "$diceChromeX" ] && break
+done
+[ -z "$diceChromeX" ] && \
+                        echo -e "\nMust select a Dice Chrome window" && exit 1
+diceChromeX=$( cut -f1 -d ' ' <<< "$diceChromeX" )
+
+
+ensureExists ()
+{
+    local ft="$1"
+    local fil="$2"
+
+    ! egrep '^(file|dir)' <<< "$ft" &>/dev/null && \
+                      echo -e "\n1st arg must be {file|dir}: $ft"  && exit 1
+    [ -z "$fil" ] &&   echo -e "\nFile name can't be empty" && exit 1
+
+    if [ 'file' = "$ft" ]
+    then
+        if [ ! -f "$fil" ]
+        then
+            ensureExists dir $( dirname "$fil" )
+            echo
+            if ! touch "$fil"
+            then
+                echo -e "\nFAIL: Failed to create '$fil'"
+                exit 1
+            fi
+            chmod 600 "$fil"
+        fi
+        if [ ! -r "$fil" ] || [ ! -w "$fil" ]
+        then
+            echo -e "\nCan't access file '$fil'"
+            exit 1
+        fi
+
+    elif [ 'dir' = "$ft" ]
+    then
+        if [ ! -d "$fil" ]
+        then
+            echo
+            if ! mkdir -vp "$fil"
+            then
+                echo -e "\nFAIL: Failed to create dir '$fil'"
+                exit 1
+            fi
+            chmod 700 "$fil"
+        fi
+        if [ ! -r "$fil" ] || [ ! -w "$fil" ]
+        then
+            echo -e "\nCan't access dir '$fil'"
+            exit 1
+        fi
+    else
+        echo -e "\nUnknown file type: '$ft'"
+        exit 1
+    fi
+}
+
+
+declare -r EMPL_DIR="$HOME/Documents/employment"
+declare -r IGNORE_FOREVER="$EMPL_DIR/search/dice/ignore.db"
+declare -r OP_PAGE="$EMPL_DIR/search/dice/search-results/op-page"
+declare -r COVER_TEMPLATES="$EMPL_DIR/cover-letter-templates"
+declare -r GREETINGS="$COVER_TEMPLATES/greetings.db"
+declare -r OPPS_DIR="$EMPL_DIR/opps"
+declare -r OPPS_IN_PROGRESS="$OPPS_DIR/opps-in-progress"
+declare -r SUBMITTED_DIR="$OPPS_DIR/submitted"
+
+ensureExists dir "$EMPL_DIR"
+ensureExists file "$IGNORE_FOREVER"
+ensureExists dir "$OP_PAGE"
+ensureExists dir "$COVER_TEMPLATES"
+ensureExists file "$GREETINGS"
+ensureExists dir "$OPPS_DIR"
+ensureExists dir "$OPPS_IN_PROGRESS"
+ensureExists dir "$SUBMITTED_DIR"
+
+
+separatorLine ()
+{
+    echo -e "\n......................................................."
+}
+
+
+scrollToOpportunityInSearchResultsPage ()
+{
+    if ! wmctrl -l | egrep -i "^$diceChromeX" &>/dev/null
+    then
+        echo -e "\nFAIL: Can't find Chrome window $diceChromeX"
+        exit 1
+    fi
+
+    local search_string=""
+    echo -e "\nSearch for opportunity title or its posting organization?"
+    select search_string in "${opp[title]}" "${opp[org]}"
+    do
+        [ -n "$search_string" ] && break
+    done
+
+    echo -e "\nRaising window. Be patient for search to start."
+    sleep 0.5
+
+
+    wmctrl -i -R "$diceChromeX"    # raise window and give it focus
+
+    # open page search box, give it focus
+    sleep 1.41
+    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Cf'
+
+    # write text to search into search box
+    sleep 0.77
+    xvkbd -window "$diceChromeX" \
+          -no-jump-pointer -no-sync -text "$search_string"
+}
+
+
+ignoreForever ()
+{
+    echo -e "\nIgnoring ${opp[id]}	${opp[title]}	${opp[org]}"
+    echo "${opp[id]}	${opp[title]}	${opp[org]}" >> "$IGNORE_FOREVER"
+}
+
+
+applicationInProgress ()
+{
+    local opDir=$( egrep -m 1 "${opp[id]}" <<< \
+                    $( ls -1 "$OPPS_DIR" ; ls -1 "$OPPS_IN_PROGRESS" ) )
+    if [ -n "$opDir" ]
+    then
+        echo -e "\nApplication in progress for $opDir"
+        return 0
+    fi
+    return 1
+}
+
+
+haveAlreadyApplied ()
+{
+    local opDir=$( egrep -m 1 "${opp[id]}" \
+                                   <<< $( find "$SUBMITTED_DIR" -type d ) )
+    if [ -n "$opDir" ]
+    then
+        echo -e "\nAlready applied to ${opDir##*/}"
+        return 0
+    fi
+    return 1
+}
+
+
+createOpportunityDirectory ()
+{
+    local -r orgName=$( toAlphaDigitDash "${opp[org]}" )
+
+    local -r opTitle=$( toAlphaDigitDash "${opp[title]}" )
+
+    local opDir="${orgName}_${opTitle}_${opp[id]}"
+
+    echo -e "\nUse (u) opportunity dir title '$opDir' or change (c) it? "
+    REPLY=""
+    while ! egrep '^[uc]$' <<< "$REPLY" &>/dev/null
+    do
+        read -erp "(u/c)? "
+    done
+    if [ 'c' = "$REPLY" ]
+    then
+        opDir=""
+        while [ -z "$opDir" ]
+        do
+            echo -e "\nCover title: $opDir\n"
+            read -erp "Enter new opp dir title: " opDir
+        done
+    fi
+    opDir="$OPPS_DIR/$opDir"
+    ensureExists dir "$opDir"
+    opp[dir]="$opDir"
+}
+
+
+createCoverLetter ()
+{
+    echo -e "\nSelect cover letter template to use:\n"
+    local coverTemplate=""
+    IFS=$'\n'
+    select coverTemplate in $( ls -1 "$COVER_TEMPLATES"/*-template.txt |
+                               sed -r 's|^/.*/||' )
+    do
+        [ -n "$coverTemplate" ] && break
+    done
+    [ -z "$coverTemplate" ] && \
+                    echo -e "\nNo cover letter template selected" && exit 1
+
+    coverTemplate="$COVER_TEMPLATES/$coverTemplate"
+
+    local -r orgName=$( toAlphaDigitDash "${opp[org]}" )
+
+    local -r opTitle=$( toAlphaDigitDash "${opp[title]}" )
+
+    local -r name=$( toAlphaDigitDash "$user_name" )
+    local cover="${name}_${opTitle}_${orgName}.odt"
+
+    echo -e "\nUse (u) cover letter title '$cover' or change (c) it? "
+    REPLY=""
+    while ! egrep '^[uc]$' <<< "$REPLY" &>/dev/null
+    do
+        read -erp "(u/c)? "
+    done
+    if [ 'c' = "$REPLY" ]
+    then
+        cover=""
+        while [ -z "$cover" ]
+        do
+            echo -e "\nCover title: $cover\n"
+            read -erp "Enter new cover letter title: " cover
+        done
+    fi
+    cover="${opp[dir]}/$cover"
+    opp[cover]="$cover"
+
+    echo
+    cp -v "$coverTemplate" "$cover"
+}
+
+
+addOportunitySpecificInfoToCoverLetter ()
+{
+    echo -e "\nSave web page of '${opp[title]}' into dir" \
+            "'$OP_PAGE'. Then return here and press <Enter> to" \
+            "have info unique to it inserted into its cover letter."
+    read -er
+
+    echo -e "\nSelect the web page to parse for opportunity-unique info:\n"
+    local opHtml=""
+    IFS=$'\n'
+    select opHtml in $( ls -1t "$OP_PAGE"/*.html )
+    do
+        [ -n "$opHtml" ] && break
+    done
+    [ -z "$opHtml" ] && echo -e \
+                "\nDidn't select an opportunity web page to parse" && exit 1
+    opHtml=$( cat "$opHtml" | sed -r 's/\s\s\s*/ /g' | sed -r '/^\s*$/d' )
+
+    # Recruiter's full name:
+    local -r firstName=$(
+            egrep -io 'class="recruiterName".*' <<< "$opHtml" |
+            cut -f3 -d '"' |
+            cut -f2 -d '>' |
+            cut -f1 -d '<' |
+            sed -r 's/^\s*//' |
+            sed -r 's/\s*$//' |
+            tr -dc '[:alnum:]' )
+
+    local fullName="$firstName "$(
+            egrep -io 'class="recruiterLastName".*' <<< "$opHtml" |
+            cut -f3 -d '"' |
+            cut -f2 -d '>' |
+            cut -f1 -d '<' |
+            sed -r 's/^\s*//' |
+            sed -r 's/\s*$//' |
+            tr -dc '[:alnum:]' )
+    opp[rec]="$fullName"
+
+    [ -z $( tr -d '[:blank:]' <<< "$fullName" ) ] && fullName="${opp[org]}"
+
+    # if JS's enabled this captures the position id
+    local positionId=$( sed -r 's/(Position +Id *:)/\n\1/g' <<< "$opHtml" |
+                        egrep '^Position +Id *:' |
+                        cut -f2 -d ':' |
+                        cut -f1 -d '<' |
+                        sed -r 's/^\s*//' |
+                        sed -r 's/\s*$//' |
+                        tr -d '\n' )
+
+    # if JS's disabled this does
+    test -z "$positionId" && positionId=$(
+                        sed -r 's/(Position +Id *:)/\n\1/g' <<< "$opHtml" |
+                        egrep -m 1 '^Position +Id *:' |
+                        cut -f2 -d '>' |
+                        cut -f1 -d '<' |
+                        sed -r 's/^\s*//' |
+                        sed -r 's/\s*$//' |
+                        tr -d '\n' )
+    opp[pid]="$positionId"
+
+    # same for dice id
+    local diceId=$( sed -r 's/(Dice +Id *:)/\n\1/g' <<< "$opHtml" |
+                    egrep 'Dice +Id *:' |
+                    cut -f2 -d ':' |
+                    cut -f1 -d '<' |
+                    sed -r 's/^\s*//' |
+                    sed -r 's/\s*$//' |
+                    tr -d '\n' )
+
+    test -z "$diceId" && diceId=$(
+                    sed -r 's/(Dice +Id *:)/\n\1/'  <<< "$opHtml" |
+                    egrep -m1 '^Dice +Id *:' |
+                    cut -f2 -d '>' |
+                    cut -f1 -d '<' |
+                    sed -r 's/^\s*//' |
+                    sed -r 's/\s*$//' |
+                    tr -d '\n' )
+    opp[did]="$diceId"
+
+    sed -i "s/{date}/$( date +'%b %d, %Y' )/g" "${opp[cover]}"
+
+    sed -i "s/{recruiter}/$fullName/g" "${opp[cover]}"
+
+    local -r greet=$( egrep -v '^\s*$' "$GREETINGS" | shuf -n 1 )
+    test -z "$greet" && echo "No greeting found in $GREETINGS" && exit 1
+    sed -i "s/{greeting}/$greet/g" "${opp[cover]}"
+
+    sed -i "s/{op-title}/${opp[title]}/g" "${opp[cover]}"
+
+    local -r url=$( cut -f1 -d '?' <<< ${opp[url]} )
+    sed -i "s|{op-url}|$url|g" "${opp[cover]}"
+
+    sed -i "s/{position-id}/$positionId/g" "${opp[cover]}"
+
+    sed -i "s/{dice-id}/$diceId/g" "${opp[cover]}"
+}
+
+
+createOpportunityNotesFile ()
+{
+    local -r notes_file="${opp[dir]}"/opp-notes.txt
+    ensureExists file "$notes_file"
+    opp[notes]="$notes_file"
+
+    echo "OPP: ${opp[title]}" >> "$notes_file"
+    echo -e "\nURL: ${opp[url]}" | cut -f1 -d '?' >> "$notes_file"
+    echo "ID: ${opp[id]}" >> "$notes_file"
+    echo -e "\nRecruiter: ${opp[rec]}" >> "$notes_file"
+    echo -e "\nORG: ${opp[org]}" >> "$notes_file"
+    echo "Position ID: ${opp[pid]}" >> "$notes_file"
+    echo "Dice ID: ${opp[did]}" >> "$notes_file"
+    echo -e "\n$( date +'%Y-%m-%d' )\n" >> "$notes_file"
+}
+
+
+prepareOpportunityDocuments ()
+{
+    applicationInProgress && return
+    haveAlreadyApplied && return
+
+    createOpportunityDirectory
+    createCoverLetter
+    addOportunitySpecificInfoToCoverLetter
+    createOpportunityNotesFile
+
+    separatorLine
+    echo -e "\n$ ls -l ${opp[dir]}"
+    ls -l ${opp[dir]}
+
+    libre-office-runner d "${opp[notes]}" &>/dev/null &
+    libre-office-runner d "${opp[cover]}" &>/dev/null &
+}
+
+
+toAlphaDigitDash ()
+{
+    echo "$1" | sed -r 's/^\s*//' | \
+                sed -r 's/\s*$//' | \
+                sed -r 's/\s\s\s*/ /g' | \
+                tr -dc ' [:alpha:][:digit:]' | \
+                tr ' ' '-'
+}
+
+
+createOrganizationDirAndInfoFile ()
+{
+    local org_name=$( toAlphaDigitDash "${opp[org]}" )
+    local char_dir=$( echo "$org_name" | sed -r 's/(.)/\1 /' | cut -f1 -d ' ' )
+    local org_dir="$SUBMITTED_DIR/$char_dir/$org_name"
+
+    ensureExists dir "$org_dir"
+    opp[org_dir]="$org_dir"
+
+    local org_info="$org_dir/${org_name}.info"
+    if ! [ -f "$org_info" ]
+    then
+        ensureExists file "$org_info"
+        echo -e "\n${opp[org]}" >> "$org_info"
+        echo -e "\n$( date +'%Y-%m-%d' )\n" >> "$org_info"
+
+        separatorLine
+        echo -e "\nls -ltr '${opp[org_dir]}'"
+        ls -lt "${opp[org_dir]}"
+    fi
+}
+
+
+moveOppDirToSubmitedDir ()
+{
+    createOrganizationDirAndInfoFile
+    echo
+    mv -v "${opp[dir]}" "${opp[org_dir]}"
+
+    echo -e "\nls -ltr '${opp[org_dir]}'"
+    ls -lt "${opp[org_dir]}"
+}
+
+
+moveOppDirToInProgressDir ()
+{
+    createOrganizationDirAndInfoFile
+    echo
+    mv -v "${opp[dir]}" "$OPPS_IN_PROGRESS"
+}
+
+
+deleteOppDir ()
+{
+    echo
+    rm -vrf "${opp[dir]}"
+}
+
+
+deleteOppDirButSaveOrganizationInfo ()
+{
+    deleteOppDir
+    createOrganizationDirAndInfoFile
+}
+
+
+moveOpportunityDirectory ()
+{
+    separatorLine
+    echo -e "\n$ ls -l ${opp[dir]}"
+    ls -l "${opp[dir]}"
+
+    echo -e "\nSelect what to do with  dir '${opp[dir]}': "
+
+    local action=""
+    select action in moveOppDirToSubmitedDir \
+                     moveOppDirToInProgressDir \
+                     deleteOppDirButSaveOrganizationInfo \
+                     deleteOppDir
+    do
+        [ -n "$action" ] && break
+    done
+    [ -z "$action" ] && echo -e "Failed to select an action" && exit 1
+
+    $action
+}
+
+
+cleanUpOpporunityHtmlDirectory ()
+{
+    separatorLine
+    echo
+    ls -l "$OP_PAGE"
+    echo
+    REPLY=""
+    read -erp "Delete all opportunity pages in dir '$OP_PAGE'? (y/n) "
+    if [ 'y' = "$REPLY" ]
+    then
+        if egrep "^$HOME/Documents/employment/" <<< "$OP_PAGE" &>/dev/null
+        then
+            echo
+            rm -rf "$OP_PAGE"/*
+        fi
+    fi
+}
+
+
+postViewingActions ()
+{
+    local whatToDo=""
+    while ! egrep '^[isa]$' <<< "$whatToDo" &>/dev/null
+    do
+        echo -e "\nAfter reviewing"
+        echo -e "\n\t${opp[title]} - ${opp[org]}"
+        echo -e "\nwhat would you like to do?"
+        echo -e "        i : ignore forever" \
+                "\n        s : skip for now" \
+                "\n        a : apply for the opportunity\n"
+        whatToDo=""
+        read -erp " i / s / a ? " whatToDo
+    done
+
+    if [ 's' = "$whatToDo" ]
+    then
+        return
+
+    elif [ 'i' = "$whatToDo" ]
+    then
+        ignoreForever
+
+    elif [ 'a' = "$whatToDo" ]
+    then
+        if prepareOpportunityDocuments
+        then
+            separatorLine
+            echo -e "\nAfter completing the cover letter and applying for" \
+                      "the opportunity, return here and press <Enter> to" \
+                      "continue evaluating opportunities." \
+                      "\n\nClose the applied-to opportunity's tab in the web" \
+                      "browser before resuming this program.\n"
+            time read -erp "<Enter>"
+
+            moveOpportunityDirectory
+            cleanUpOpporunityHtmlDirectory
+        fi
+    else
+        echo -c "\nUnknown command: '$whatToDo'"
+        exit 1
+    fi
+}
+
+
+evaluateOpportunity ()
+{
+    echo -e "\nUrl: ${opp[url]}" \
+            "\n\nId: ${opp[id]}"
+
+    applicationInProgress  && return
+    haveAlreadyApplied  && return
+
+    if egrep "^${opp[id]}" "$IGNORE_FOREVER" &>/dev/null
+    then
+       echo -en "\nIgnoring "
+       egrep "^${opp[id]}" "$IGNORE_FOREVER"
+       return
+    fi
+
+    local whatToDo=""
+    while ! egrep '^[isl]$' <<< "$whatToDo" &>/dev/null
+    do
+        echo -e "\n    ${opp[title]} - ${opp[org]}"
+        echo -e "        i : ignore forever" \
+                "\n        s : skip for now" \
+                "\n        l : scroll to it in search results page\n"
+        whatToDo=""
+        read -erp " i / s / l ? " whatToDo
+    done
+
+    if [ 's' = "$whatToDo" ]
+    then
+        return
+
+    elif [ 'i' = "$whatToDo" ]
+    then
+        ignoreForever
+
+    elif [ 'l' = "$whatToDo" ]
+    then
+        scrollToOpportunityInSearchResultsPage
+        postViewingActions
+    else
+        echo -c "\nUnknown command: '$whatToDo'"
+        exit 1
+    fi
+}
+
+
+echo -e "\nSelect the opportunity URL type to use:"
+oppUrlType=""
+IFS=' '
+select oppUrlType in applyable easy-apply
+do
+    [ -n "$oppUrlType" ] && break
+done
+[ -z "$oppUrlType" ] && \
+                    echo -e "\nMust select an opportunity URL type" && exit 1
+
+if [ 'applyable' = "$oppUrlType" ]
+then
+    oppUrlType='\/jobs\/detail\/'
+
+elif [ 'easy-apply' = "$oppUrlType" ]
+then
+    oppUrlType='\/job-detail\/'
+else
+    echo -e "\nUnknown opp URL type: $oppUrlType" && exit 1
+fi
+
+
+declare -A opp=()
+IFS=$'\n'
+for l in $( cat "$search_html_file" |
+            sed -r 's/\s\s\s*/ /g' |
+            sed -r '/^\s*$/d' |
+            sed -r 's/href="/\n/g' |
+            egrep  '^ *https:' |
+            egrep 'https:\/\/' |
+            egrep  "$oppUrlType" ) # ⇒ "applyable" opportunities ★
+do
+    echo -e "\n-------------------------------------------------------------"
+
+    opp=()
+
+    opp[url]=$( cut -f1 -d '"' <<< "$l" )
+    opp[id]=$( cut -f1 -d '?' <<< "${opp[url]}" | sed -r 's|^.*/||' )
+
+    opp[title]=$( cut -f2 -d '>' <<< "$l" |
+                  cut -f1 -d '<' |
+                  sed -r 's/^\s\s*//' |
+                  sed -r 's/\s\s*$//' |
+                  sed -r 's/\s\s\s*/ /' |
+                  tr '/' '-' )
+
+    opp[org]=$( cat "$search_html_file" |
+                sed -r 's/\s\s\s*/ /g' |
+                sed -r '/^\s*$/d' |
+                sed -r 's/href="/\n/g' |
+                egrep -A 3 '^ *https:' |
+                egrep -A 1 "${opp[id]}" |
+                # Read closely, slowly: At least two URLs with opp[id] are in
+                # the search results page. One is just ABOVE/BEFORE the NAME of
+                # the org that posted the opp displayed just ABOVE the opp[id]
+                # we actually want. Another just before the name of the org
+                # that posted opp[id]. This is the URL instance we want, so as
+                # to capture the org name just after it. The last 2 lines from
+                # the above egrep yield the correct org name.
+                tail -n 2 |
+                egrep -m 1 '"ng-star-inserted' |
+                cut -f2 -d '>' |
+                cut -f1 -d '<' |
+                sed -r 's/^\s\s*//' |
+                sed -r 's/\s\s*$//' |
+                sed -r 's/\s\s\s*/ /' |
+                  tr '/' '-' )
+
+    if [ -z "${opp[url]}" ] || [ -z "${opp[id]}" ] || \
+       [ -z "${opp[org]}" ] || [ -z "${opp[title]}" ]
+    then
+        echo -e "\nFAIL: Search results HTML parsing algo may need updated"
+        exit 1
+    fi
+
+    evaluateOpportunity
+done
+
+[ -z "$l" ] && echo -e "\nl's empty. This doesn't seem... correct" && exit 1
+

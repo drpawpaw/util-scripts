@@ -1,0 +1,324 @@
+#!/bin/bash
+
+# © 2022 drpawpaw - All Rights Reserved.
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details: http://www.gnu.org/licenses/
+
+# Interactively opens, mounts, unmounts and closes encrypted drives. After you
+# choose an encrypted drive which of the actions it offers to take depends on
+# the drive's current state WRT open, mounted, unmounted or closed.
+
+# 2022 version is a significant re-write of a less useful earlier version.
+
+# TODO: This script makes at least one massive assumption: that there's only
+#       one partition on the drive being opened-closed, mounted-unmounted
+#       Enhance it to handle multiple partitions on the drive.
+
+# https://unix.stackexchange.com/questions/35508/eject-usb-drives-eject-command
+# https://gitlab.com/cryptsetup/cryptsetup/wikis/FrequentlyAskedQuestions
+# http://www.signal11.us/oss/udev/
+
+
+if [ 0 != $( id -u ) ]
+then
+    echo "Must start this script as non-root (non-sudo) user"
+    exit 1
+fi
+
+for d in blkid cryptsetup eject lsblk mount sed umount
+do
+    if ! which $d >/dev/null 2>&1
+    then
+        echo "${0##*/} depends on ${d}. Didn't find ${d}" >&2
+        exit 1
+    fi
+done
+
+
+function openEncryptedDrive
+{
+    echo -e "\n# cryptsetup status '$dev_map_drive_crypt'"
+    if cryptsetup status "$dev_map_drive_crypt" | \
+            grep -E "^ *device: +/dev/"
+    then
+         echo -e "Encrypted drive $drive already open." \
+                 "Will not attempt to open it"
+         return
+    fi
+
+    echo -e "\nOpening encrypted $drive"
+
+    echo -e "\n# cryptsetup luksOpen $drive $drive_crypt"
+    cryptsetup --verbose luksOpen $drive $drive_crypt
+    sleep 1
+
+    echo
+    if ! blkid | grep -E "^$dev_map_drive_crypt"
+    then
+        echo -e "\nERORR: cryptsetup failed." \
+                "Exiting without mounting $dev_map_drive_crypt"
+    fi
+}
+
+
+function mountDrive
+{
+    openEncryptedDrive
+
+    if mount | grep -E "^ *$dev_map_drive_crypt +on "  # yes, it's correct
+    then
+        echo -e "\n$drive already mounted." \
+                 "Will not attempt to mount it"
+        return
+    fi
+
+    echo -e "\nMounting $drive"
+
+    echo -e "\n$ ls -l /media | grep -E '^d'"
+    ls -l /media | grep -E '^d'
+
+    OLD_IFS="$IFS"
+    IFS=$'\n'
+    echo -e "\nSelect mount point directory below /media:"
+    select mount_point in $( ls -1 /media  )
+    do
+         [ -n "$mount_point" ] && break
+    done
+    IFS="$OLD_IFS"
+
+    if [ -z "$mount_point" ]
+    then
+        echo "No mount point selected. Exiting without making any changes"
+        exit 1
+    fi
+
+    mount_point="/media/$mount_point"
+
+    # TODO: Find a better way of determining unmounted dirs. Perhaps use those
+    #       results in above 'select', offering only unmounted dirs as options.
+    is_mnt_pnt_unmounted=$( ls "$mount_point" )
+    echo -e "\n$ ls '$mount_point'"
+    echo "$is_mnt_pnt_unmounted"
+
+    if [ -n "$is_mnt_pnt_unmounted" ]
+    then
+        echo -e \
+            "\nDirectory '$mount_point' is already mounted in file systerm." \
+            "Will not attempt to mount to it"
+        exit 1
+    fi
+
+    echo "# mount '$dev_map_drive_crypt' '$mount_point'"
+    mount --verbose "$dev_map_drive_crypt" "$mount_point"
+    echo
+    mount | grep "$mount_point"
+
+    echo -e "\n$ ls -a '$mount_point'"
+    ls -a "$mount_point"
+}
+
+
+function unmountDrive
+{
+    echo
+    if ! mount | grep -E "^ *$dev_map_drive_crypt +on " # yes, it's correct
+    then
+        echo "$drive is already not mounted." \
+              "Will not attempt to unmount it"
+        return
+    fi
+
+    sync ; sleep 1
+
+    mount_point=$( lsblk -P | grep -E "^ *NAME=\"$drive_crypt\"" | \
+                              grep -oE " +MOUNTPOINT=\".*\" *$" | \
+                              cut -f2 -d '"' )
+
+    echo -e "\nUnmounting $dev_map_drive_crypt from $mount_point"
+    echo "# umount '$mount_point'"
+    umount -v "$mount_point"
+
+    echo
+    lsblk -P | grep -E "^ *NAME=\"$drive_crypt"\"
+}
+
+
+function closeEncryptedDrive
+{
+    unmountDrive
+    echo -e "\nClosing encrypted $drive"
+
+    echo -e "\n# cryptsetup -v close '$dev_map_drive_crypt'"
+    cryptsetup -v close "$dev_map_drive_crypt"
+
+    device=/dev/$( cut -f1 -d '_'  <<< "$drive_crypt" | sed -r 's/[0-9]+$//')
+    echo -e "\nEjecting device $device"
+
+    if ! eject -v "$device"
+    then
+        echo
+        echo "Failed to eject '$device'. Exiting"
+        exit 1
+    fi
+
+    echo -e "\nSetting $device to 'offline' and 'deleted'"
+    echo    "If password prompted, it's for root's"
+
+    while true                       # In case of password typos
+    do
+        # Often sudo's don't have permission to write to these files.
+        if su -c "echo offline > /sys/block/${device##*/}/device/state ; \
+                  sleep .25 ; \
+                  echo 1 > /sys/block/${device##*/}/device/delete"
+        then
+            break
+        fi
+    done
+
+    echo -e "\nIt should now be safe to unplug drive from machine"
+}
+
+
+echo -e "\nCAUTION: This script only works correctly for encrypted drives" \
+        "containing one partition. This is especially true when closing one." \
+        "You've been warned.\n"
+
+lsblk
+
+echo -e "\nSelect drive to open-close, mount-unmount toggle:"
+
+drive=""
+OLD_IFS="$IFS"
+IFS=$'\n'
+select drive in $( blkid | grep -iE '(^/dev/mapper|crypto_LUKS)' )
+do
+     drive=$( cut -f 1 -d ':' <<< "$drive" )
+     [ -n "$drive" ] && break
+done
+IFS="$OLD_IFS"
+
+if [ -z "$drive" ]
+then
+    echo "No drive selected. Exiting without making any changes"
+    exit 1
+fi
+
+
+
+if grep -E '^/dev/mapper/' <<< $drive >/dev/null
+then
+    declare -r drive_crypt=${drive##*/}
+    dev_map_drive_crypt="$drive"
+else
+    declare -r drive_crypt=${drive##*/}_crypt
+    dev_map_drive_crypt="/dev/mapper/$drive_crypt"
+fi
+
+
+action=""
+dev_is_open=false
+dev_is_mounted=false
+echo
+if mount | grep -E "^ *$dev_map_drive_crypt +on "
+then
+    dev_is_open=true
+    dev_is_mounted=true
+
+elif blkid | grep -E "^ *$dev_map_drive_crypt *:"
+then
+    dev_is_open=true
+
+elif grep -E '^ */dev/mapper/' <<< $drive >/dev/null
+then
+    # Formatting an open encrypted drive's names as
+    # "/dev/mapper/{short dev name}_crypt" is not written in stone.
+    # Therefore, do a more complete check if here.
+    # TODO: This section will need tested more manually, in which non-standard
+    #       /dev/mapper names are created by manually opening an encrypted
+    #       drive with cryptsetup
+
+    OLD_IFS="$IFS"
+    IFS=$'\n'
+    for dev_map in $( blkid | grep -E '^ */dev/mapper/' | cut -f1 -d ':' )
+    do
+        if cryptsetup status "$dev_map" | grep -E "^ *device: +$drive"
+        then
+            dev_is_open=true
+            dev_map_drive_crypt="$dev_map"
+            mount | grep -E "^ *$dev_map +on " && dev_is_mounted=true
+            break
+        fi
+    done
+    IFS=$OLD_IFS
+fi
+
+    $dev_is_mounted    && echo -e "\n$drive is mounted"
+    $dev_is_open       && echo -e "\n$drive is open"
+[ ! $dev_is_open ]     && echo -e "\n$drive is closed and unmounted"
+
+
+if $dev_is_mounted
+then
+    echo -e "\nClosing includes first unmounting and last ejecting." \
+            "Unmounting will not close or eject the drive\n"
+
+    read -rp "Close or Unmount $dev_map_drive_crypt ? (C/U) " close_or_unmount
+
+    if [ C = "$close_or_unmount" ]
+    then
+        closeEncryptedDrive
+
+    elif [ U = "$close_or_unmount" ]
+    then
+        unmountDrive
+
+    else
+        echo -e "\nUnknown action: '$close_or_unmount'" \
+                "Exiting without making any changes"
+        exit 1
+    fi
+
+elif $dev_is_open
+then
+    echo
+    read -rp "Mount or Close $dev_map_drive_crypt ? (M/C) " mount_or_close
+
+    if [ M = "$mount_or_close" ]
+    then
+        mountDrive
+
+    elif [ C = "$mount_or_close" ]
+    then
+        closeEncryptedDrive
+
+    else
+        echo -e "\nUnknown action: '$close_or_unmount'." \
+                "Exiting without making any changes"
+        exit 1
+    fi
+else # drive is unmounted and closed
+
+    echo -e "Mounting includes first opening." \
+            "Opening will not mount it\n"
+
+    read -rp "Open or Mount $dev_map_drive_crypt ? (O/M) " open_or_mount
+
+    if [ M = "$open_or_mount" ]
+    then
+        mountDrive
+
+    elif [ O = "$open_or_mount" ]
+    then
+        openEncryptedDrive
+    else
+        echo -e "\nUnknown action: '$close_or_unmount'" \
+                "Exiting without making any changes"
+        exit 1
+    fi
+fi
+

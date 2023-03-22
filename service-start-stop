@@ -1,0 +1,53 @@
+#!/bin/dash
+
+# Author: drpawpaw - 201?
+
+# Performs the most common service management commands (start, restart, stop)
+# on Linux, independent of which of the common service managers is installed.
+
+if [ "0" != "$(id -u)" ]
+then
+    echo "\n'${0##*/}' only runs as root" >&2
+    exit 1
+fi
+
+if [ -z "$2" ] || ( [ start != "$1" ] && [ stop != "$1" ] )
+then
+    echo "\nUsage: # ${0##*/} {start|stop} {simple service name}" >&2
+    exit 1
+fi
+
+if [ start = "$1" ]
+then
+    ACTN=restart
+else
+    ACTN=stop
+fi
+
+SRVC="$2"
+
+echo "\n$ACTN -> $SRVC\n"
+
+if which systemctl >/dev/null 2>&1
+then
+    systemctl --no-pager $ACTN $SRVC
+    sleep 2
+    systemctl --no-pager status -l $SRVC
+
+elif which service >/dev/null 2>&1
+then
+    service $SRVC $ACTN
+    sleep 2
+    service $SRVC status
+
+elif [ -f /etc/init.d/$SRVC ]
+then
+    /etc/init.d/$SRVC $ACTN
+    sleep 2
+    /etc/init.d/$SRVC status
+
+else
+    echo "\nERR: Failed to $ACTN '$SRVC'" >&2
+    exit 1
+fi
+

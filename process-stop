@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Author: drpawpaw - 201?
+
+# Stops all processes with the same simple name or the proces with a specific
+# id. Intended for use in scirpts. Use with caution. Read its code closely to
+# make sure it fits usage context.
+
+if [ "0" != "$(id -u)" ]
+then
+    echo -e "\n'${0##*/}' only runs as root" >&2
+    exit 1
+fi
+
+if [ -z "$1" ] || [ -z "$2" ]
+then
+    echo -e "\nUsage: # ${0##*/} {process name|process id}" \
+                                "{sleep seconds between kill calls}" >&2
+    exit 1
+fi
+
+echo -en "\nStopping $1 instance(s): " >&2
+IFS=' '
+for S in SIGTERM SIGINT SIGQUIT SIGKILL    # start nice, get meaner if needed
+do
+    P=""
+    pids=$( egrep '^[0-9]+$' <<< "$1" )    # was a PID passed in?
+
+    # ps default ordering starts with parent process id, then children.
+    [ -z "$pids" ] && pids=$( ps --no-headers -o pid -C $1 | tr '\n' ' ' )
+
+    echo $pids >&2
+
+    for P in $pids
+    do
+        # Confirm a process is still alive before attempting to stop it.
+        if ps --no-headers -p $P &>/dev/null
+        then
+            echo -e "\n$S -> $P $1" 1>&2
+            kill -s $S $P
+
+            # kill often returns before a process and its children finish
+            # shutting down, so give them some time to avoid sending kill
+            # signals to processes that have already stopped.
+            sleep $2
+        fi
+    done
+
+    # Find processes started with, for example, bash's
+    # 'exec -a', which the above for loop can't find.
+    for P in $( ps -ef --no-headers |
+                grep -E "( |/)$1( |$)" |
+                grep -vE "( grep |${0##*/}) " |
+                sed -r 's/^ *//' |
+                sed -r 's/   */ /g' |
+                cut -d ' ' -f2 |
+                sort -r |
+                tr '\n' ' ' )
+    do
+        echo -e "\n$S -> $P $1" >&2
+        kill -s $S $P
+        sleep $2
+    done
+
+    echo
+    echo -n "$1 instances not stopped by $S: " >&2
+    if ! ps -ef --no-headers | \
+         grep -E "(^? |/)$1( |$)" | \
+         grep -vE "( grep |${0##*/}) " >&2
+    then
+        echo "none" >&2
+        exit 0
+    fi
+done
+

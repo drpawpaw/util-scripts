@@ -1,0 +1,275 @@
+#!/bin/bash
+
+# © 2015-2023 drpawpaw - All Rights Reserved.
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details: http://www.gnu.org/licenses/
+
+
+# Run this script from an SSH client host to create an SSH key-pair login from
+# it to an SSH server. Run it without args to see usage.
+#
+# ssh_user="username on SSH server host"
+#
+# remote_host="IP address of SSH server"
+#
+# remote_host_nickname="short client-side-unique nickname for this connection"
+#
+# ssh_server_port="SSH server listens on this port--required only if it not 22"
+#
+# You can exit this script (Ctrl-C) at any of its numerous pause-points without
+# causing any behavior, state or security issues on either the client or the
+# server. At most you'll end up with a few useless artifacts on the client or
+# server. On the client you'll at most create a key-pair that you'll likely
+# not end up using, and possibly a redundant entry in '~/.ssh/config'. On the
+# server at most there will be an unused public key value in
+# '~/.ssh/authorized_keys'. This script always only appends new entries to
+# these files.
+#
+# Thus, run this script fully or partially as many times as needed to create a
+# working SSH key-pair login from the client to the server. If it turns out to
+# be two or more runs, then optionally, if you want to keep 'authorized_keys'
+# and 'config' clean, edit them to remove unneeded ('authorized_keys') or
+# redundant ('config') entries. The script itself will prompt you to ask if it
+# should delete an old/redundant key-pair on the client, to which you should
+# likely reply 'y'. If deleting unneeded public key values from the server's
+# 'authorized_keys', do not delete the one that is part of the working SSH
+# key-pair. The working value is most likely the last one in the file. All the
+# ones directly above it with the exact same trailing name can likely be
+# deleted. 'authorized_keys' contains one public key value per line.
+
+
+IFS=' '
+for d in hostname scp ssh /usr/bin/ssh /usr/bin/ssh-add \
+                  /usr/bin/ssh-agent /usr/bin/ssh-keygen
+do
+    if ! which $d >/dev/null 2>&1
+    then
+        echo "${0##*/} depends on ${d}. Didn't find ${d}" >&2
+        exit 1
+    fi
+done
+
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]
+then
+    echo -e "\nUsage: $ ${0##*/}  ssh_user  remote_host" \
+                                  " remote_host_nickname  [ssh_server_port]"
+    echo -e "\nSee the top of $0 for descriptions of the params."
+    exit 1
+fi
+
+declare -r ssh_user=$1
+declare -r remote_host=$2
+declare -r remote_host_nickname=$3
+
+ssh_port=22
+[ -n "$4" ] && ssh_port=$4
+
+if (( 1 > ssh_port )) || (( 65535 < ssh_port ))
+then
+    echo -e "\nInvalid SSH server listening port: $ssh_port\n"
+    exit 1
+fi
+
+
+declare -r client_host=$( hostname -s )
+
+
+if ! env | grep -E '^SSH_AUTH_SOCK=\/' &>/dev/null
+then
+    /usr/bin/ssh-agent $0 $ssh_user $remote_host $remote_host_nickname $ssh_port
+    exit $?
+fi
+
+
+echo -e "\nCreating key-pair: $USER@$client_host ->" \
+     "$ssh_user@$remote_host:$ssh_port"
+
+
+declare -r ssh_dir="$HOME/.ssh"
+echo
+A=""
+command read -erp "Save new key-pair to '$client_host:$ssh_dir'? (y/n) " A
+
+if [ "y" = "$A" ]
+then
+    if ! [ -e "$ssh_dir" ]
+    then
+        mkdir -vp "$ssh_dir"
+    fi
+else
+    echo -en "\nEnter full path of a writable dir (no trailing slash) in" \
+             "which to save the new key-pair: "
+    command read -er ssh_dir
+
+    if [ ! -d "$ssh_dir" -o ! -w "$ssh_dir" ]
+    then
+        echo -e "\nEither '$ssh_dir' does not exist or '$USER' can't" \
+                "write to it."
+        exit 1
+    fi
+fi
+
+
+key_file=$( hostname -s )_${remote_host_nickname}
+
+REPLY=""
+echo -e "\nUser '$key_file' for new key-pair file names (y)," \
+        "or enter a different name (d) ? (y/d)"
+read -er
+if [ 'd' = "$REPLY" ]
+then
+    key_file=""
+    while [ -z "$key_file" ]
+    do
+        read -erp "Enter Linux-legal file name for key-pair: " key_file
+    done
+fi
+
+
+if [ -e "$ssh_dir/$key_file" ]
+then
+    echo
+    A=""
+    command read -erp \
+           "Key-pair '$ssh_dir/$key_file' already exists. Delete it? (y/n) " A
+
+    if [ y = "$A" ]
+    then
+        if ! rm -vf "$ssh_dir/$key_file" "$ssh_dir/$key_file.pub"
+        then
+            echo -e "\nFailed to delete existing copy of key-pair '$key_file'."
+            exit 1
+        fi
+    else
+        echo -e "\nDecide what to do with the existing copy of this key-pair."
+        exit 1
+    fi
+fi
+
+
+# Generate a key size that hopefully reduces vulnerability to
+# improvements to https://en.wikipedia.org/wiki/ROCA_vulnerability
+declare -i key_size=$( seq -s ' ' 4099 8191 |
+                       factor |
+                       egrep ': +[0-9]+$' |  # selects primes
+                       shuf -n 1 |
+                       cut -f1 -d ':' |
+                       tr -dc '[:digit:]' )
+
+echo -e "\nKey-pair's size will be $key_size bits."
+echo
+echo "Generating the key-pair could take some time."
+echo
+echo "You're prompted just below to type in a passphrase for the private" \
+     "key of the new key-pair. It's usually a bad idea to choose an empty" \
+     "one (no passphrase)."
+echo
+if ! /usr/bin/ssh-keygen -t rsa -b $key_size \
+                         -C $key_file -f "$ssh_dir/$key_file"
+then
+    echo -e "\nFailed to generate key-pair."
+    exit 1
+fi
+
+
+echo -e "\nThe next action assumes username-password logins are enabled" \
+     "on SSH server '$remote_host'. If they're not you'll need to find" \
+     "another way to add the content of file $key_file.pub to" \
+     "'$ssh_user@$remote_host:.ssh/authorized_keys' before you can begin" \
+     "logging in with the key-pair."
+echo
+echo "The next password you're prompted for is $ssh_user's password on SSH" \
+     "server host '$remote_host'. The password prompt after that is for" \
+     "the passphrase of the new private key (if you provided one above)."
+echo
+echo "Ensuring dir '$ssh_user@$remote_host:.ssh' exists, and" \
+     "appending the value of $key_file.pub to file authorized_keys below it."
+echo
+
+pub_key_value=$( cat ${ssh_dir}/${key_file}.pub )
+
+# Adding '-o IdentitiesOnly=yes' to ssh/scp inputs eliminates the possibility
+# of a confusing, poorly documented, and thus difficult to figure out ssh
+# login failure.
+
+/usr/bin/ssh -o Port=$ssh_port -o IdentitiesOnly=yes \
+           ${ssh_user}@${remote_host} \
+           "mkdir \"\$HOME/.ssh\" 2>/dev/null
+            chmod 700 \"\$HOME/.ssh\"
+            echo '${pub_key_value}' >> \"\$HOME/.ssh/authorized_keys\""
+
+if [ 0 != $? ]
+then
+    echo -e "\nFailed to append value of ${key_file}.pub to file" \
+            "'$ssh_user@$remote_host:.ssh/authorized_keys'."
+    exit 1
+fi
+
+
+echo -e "\nAdding new private key $key_file to SSH agent" \
+        "'$client_host:$SSH_AUTH_SOCK' to simplify new SSH key-pair testing.\n"
+
+/usr/bin/ssh-add -k "$ssh_dir/$key_file"
+
+
+echo -e "\nTEST 1: Explicit use of -i for ssh login to ${remote_host}\n"
+
+/usr/bin/ssh -o Port=$ssh_port -i "$ssh_dir/$key_file" \
+             ${ssh_user}@${remote_host} \
+     'echo "TEST 1: You are logged into $(hostname -s) as $USER" ;
+      echo "Logging out of $(hostname -s)"'
+
+
+if ! [ -e "$HOME/.ssh" ]
+then
+    mkdir -vp "$HOME/.ssh"
+    chmod 600 "$HOME/.ssh"
+fi
+
+shortcut_info="
+Host $remote_host_nickname
+    HostName $remote_host
+    User $ssh_user
+    IdentitiesOnly yes
+    IdentityFile $ssh_dir/$key_file
+    ServerAliveInterval 60
+"
+
+if [ 22 != "$ssh_port" ]
+then
+    shortcut_info="$shortcut_info    Port $ssh_port
+"
+fi
+
+echo -e "\nAppending SSH nickname \"${remote_host_nickname}\" info to file" \
+        "$client_host:$HOME/.ssh/config:"
+
+echo "$shortcut_info" | tee -a "$HOME/.ssh/config"
+
+
+echo -e "TEST 2: Of new $client_host:$HOME/.ssh/config entry \"" \
+        "${remote_host_nickname}\":\n"
+
+/usr/bin/ssh $remote_host_nickname \
+     'echo "TEST 2: You are logged into $(hostname) as ${USER}" ;
+      echo "Logging out of $(hostname -s)"'
+
+echo -e "\nIf both login tests above completed without the ${remote_host}" \
+        "SSH server prompting for user ${ssh_user}'s password, then you can" \
+        "begin using 'ssh ${remote_host_nickname}' to log in to" \
+        "${remote_host}"
+
+echo -e "\nIf during either test the SSH server prompted for" \
+        "${ssh_user}@${remote_host}'s password, then something" \
+        "likely went wrong and if so will need fixed before you can begin" \
+        "logging into $remote_host with 'ssh $remote_host_nickname'"
+
+echo -e "\nNew key-pair files on $client_host:"
+ls -1ltr $ssh_dir/$key_file*
+echo
+

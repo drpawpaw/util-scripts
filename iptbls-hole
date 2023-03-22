@@ -1,0 +1,312 @@
+#!/bin/bash
+
+# © 2020,2021 drpawpaw - All Rights Reserved.
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details: http://www.gnu.org/licenses/
+
+
+# Opens a temporary hole in the local iptables firewall, either for outbound
+# or inbound packets. If the direction (-d) is outbound it also restricts the
+# outbound traffic to only packets sent by processes owned by the SUDO_USER
+# caller of this script, xor by those of a username passed in (-u).
+
+# Optionally takes a remote host param (-h) to restrict the destination or
+# source of packets through the opened port.
+
+# Run the script without params for a basic usage message, and see the 'while
+# getopts' loop just below for short descriptions of each param.
+
+# The close action of this script is intended only to close ports previously
+# opened by it. To be sure it's run when finished using the opened port, pass
+# in -s to the open call. -s causes this script to start an interactive shell
+# after opening the port, and then to close the port after that shell exits.
+# The shell's window title and cmd prompt are named/formatted to make it clear
+# that you're in a shell started by this script, and which port was opened.
+
+# Calls to close a port previously opened by this script must pass in the
+# exact same parameters that were passed to the open call. One exception: -s,
+# which only makes sense for open calls, although passing -s into a close call
+# is safe--it's just ignored.
+
+# This script is meant to be wrapped by protocol-specific "open hole" scripts.
+# For example, iptbls-ssh-shell.
+
+# Variables inLogChain and outLogChain hold the names of the iptables chains
+# that are jumped to for logging and ACCEPTing a packet. These are specific to
+# the iptables configuration for which this script was written. Each iptables
+# configuration likely has a different approach for logging and ACCPET. So to
+# use this script you'll need to adjust how it handles creation of rules WRT
+# logging and ACCEPT.
+
+
+if [ 0 != $(id -u) ] || [ -z "$SUDO_USER" ]
+then
+    echo -e "\n${0##*/} only runs as sudo root.\n"
+    exit 1
+fi
+
+if [ root == "$SUDO_USER" ]
+then
+    echo -e "\nSUDO_USER's value is 'root'." \
+            "Almost certainly this is not appropriate."
+    exit 1
+fi
+
+
+function printUsageAndExit
+{
+    echo -e "\nUsage: $ ${0##*/} -a {o|c} -d {o|i} -p {u|t|i} -i {port #} " \
+                               "[-s] [-u {username}] [-h {host}]"
+    echo -e "\nInbound ICMP (-p i) requires a specific host (-h {host})."
+    echo "Ports (-n {port #} make no sense with ICMP protocol (-p i)."
+    echo -e "\nSee script's while getopts loop for args defs."
+    exit 1
+} >&2
+
+
+for e in grep host iptables mktemp rm ssh-agent sudo
+do
+    if ! which $e &>/dev/null
+    then
+        echo -e "\n${0##*/} needs ${e}. Didn't find it. Exiting.\n" >&2
+        exit 1
+    fi
+done
+
+
+#TODO: change -s to require a parameter, the shell executable to run
+
+startShell=false
+user=$SUDO_USER
+port=""
+
+while getopts ":a:sd:p:P:h:u:" arg
+do
+    case $arg in
+
+        a  ) declare -r action=$OPTARG ;;         # Action: open or close port?
+
+        s  ) startShell=true ;;        # Start a bash shell after opening port,
+                                       # then close port when shell is exited.
+
+        d  ) declare -r direction=$OPTARG ;;     # Enable incoming or outgoing?
+
+        p  ) proto=$OPTARG ;;                       # TCP, UDP or ICMP traffic?
+
+        P  ) port=$OPTARG ;;           # 0 < port < 65536 (do not set for ICMP)
+
+        h  ) declare -r host="$OPTARG" ;;       # Open to just one remote host?
+
+        u ) user="$OPTARG" ;;   # Only packets from processes owned by user are
+                                # allowed to pass through outbound opened hole.
+
+        \? ) printUsageAndExit
+             exit 1 ;;
+    esac
+done
+[ o != "$action" ] && [ c != "$action" ] && printUsageAndExit
+
+[ o != "$direction" ] && [ i != "$direction" ] && printUsageAndExit
+
+[ t != "$proto" ] && [ u != "$proto" ] && \
+                     [ i != "$proto" ] &&  printUsageAndExit
+
+[ i != "$proto" ] && [ -n "$port" ] && \
+                    (( 1 > port )) || (( 65535 < port )) && printUsageAndExit
+
+! id -u $user &>/dev/null && printUsageAndExit
+
+
+if [ t = "$proto" ]
+then
+    proto=tcp
+
+elif [ u = "$proto" ]
+then
+    proto=udp
+else
+    proto=icmp
+    [ i = "$direction" ] && [ -z "$host" ] && printUsageAndExit
+    [ -n "$port" ] && printUsageAndExit
+fi
+
+
+declare -r inLogChain=IN_LOG
+declare -r outLogChain=OUT_LOG
+
+
+function closeHole
+{
+    local dport=""
+    local sport=""
+    if [ -n "$port" ]
+    then
+        dport="--dport $port"
+        sport="--sport $port"
+    fi
+
+    # Unlike openHole, attempt all rule-delete calls, even if some fail.
+
+    if [ o = "$direction" ]
+    then
+        dest=""
+        [ -n "$host" ] && dest="-d $host"
+
+        set -o xtrace
+        iptables -D OUTPUT   -p $proto $dest $dport -j OUT_LOG \
+                             -m owner --uid-owner $( id -u $user ) \
+                             -m comment --comment "$user $proto tmp hole"
+
+        iptables -D OUTPUT   -p $proto $dest $dport -j ACCEPT \
+                             -m state --state ESTABLISHED,RELATED \
+                             -m owner --uid-owner $( id -u $user ) \
+                             -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+        src=""
+        [ -n "$host" ] && src="-s $host"
+
+        set -o xtrace
+        iptables -D INPUT   -p $proto $src $sport -j ACCEPT \
+                            -m state --state ESTABLISHED,RELATED \
+                            -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+    elif [ i = "$direction" ]
+    then
+
+        src=""
+        [ -n "$host" ] && src="-s $host"
+
+        set -o xtrace
+        iptables -D INPUT   -p $proto $src $dport -j $inLogChain \
+                            -m comment --comment "$user $proto tmp hole"
+
+        iptables -D INPUT   -p $proto $src $dport -j ACCEPT \
+                            -m state --state ESTABLISHED,RELATED \
+                            -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+        dest=""
+        [ -n "$host" ] && dest="-d $host"
+
+        set -o xtrace
+        iptables -D OUTPUT   -p $proto $sport $dest -j ACCEPT \
+                             -m state --state ESTABLISHED,RELATED \
+                             -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+    else
+        echo -e "\nUnknown direction: $direction\n"
+        exit 1
+    fi
+}
+
+              #  1      2       3      4       6      8      15
+trap closeHole SIGHUP SIGINT SIGQUIT SIGILL SIGABRT SIGFPE SIGTERM
+
+
+function openHole
+{
+    local dport=""
+    local sport=""
+    if [ -n "$port" ]
+    then
+        dport="--dport $port"
+        sport="--sport $port"
+    fi
+
+    set -e                       # Fail fast if any iptables rule create fails.
+
+    if [ o = "$direction" ]
+    then
+        local dest=""
+        [ -n "$host" ] && dest="-d $host"
+
+        echo
+        set -o xtrace
+        iptables -I OUTPUT 1 -p $proto $dest $dport -j OUT_LOG \
+                             -m owner --uid-owner $( id -u $user ) \
+                             -m comment --comment "$user $proto tmp hole"
+
+        iptables -I OUTPUT 1 -p $proto $dest $dport -j ACCEPT \
+                             -m state --state ESTABLISHED,RELATED \
+                             -m owner --uid-owner $( id -u $user ) \
+                             -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+        src=""
+        [ -n "$host" ] && src="-s $host"
+
+        set -o xtrace
+        iptables -I INPUT 1 -p $proto $src $sport -j ACCEPT \
+                            -m state --state ESTABLISHED,RELATED \
+                            -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+    elif [ i = "$direction" ]
+    then
+
+        src=""
+        [ -n "$host" ] && src="-s $host"
+
+        set -o xtrace
+        iptables -I INPUT 1 -p $proto $src $dport -j $inLogChain \
+                            -m comment --comment "$user $proto tmp hole"
+
+        iptables -I INPUT 1 -p $proto $src $dport -j ACCEPT \
+                            -m state --state ESTABLISHED,RELATED \
+                            -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+        dest=""
+        [ -n "$host" ] && dest="-d $host"
+
+        set -o xtrace
+        iptables -I OUTPUT 1 -p $proto $dest $sport -j ACCEPT \
+                             -m state --state ESTABLISHED,RELATED \
+                             -m comment --comment "$user $proto tmp hole"
+        set +o xtrace
+
+    else
+        echo -e "\nUnknown direction: $direction\n"
+        exit 1
+    fi
+
+    set +e
+}
+
+
+if [ o = "$action" ]
+then
+    openHole
+
+    if $startShell
+    then
+        userHome=$( cat /etc/passwd | grep -E "^$user:" | cut -d : -f6 )
+        TF=$( sudo -u $user mktemp )
+        echo ". $userHome/.bashrc"                               > "$TF"
+        echo "PS1='\n$user ${0##*/} \$( pwd )\n$proto:$port> '" >> "$TF"
+        echo "echo -e '\033]2;'$proto:$port ${0##*/}'\007'"     >> "$TF"
+        echo "cd $PWD"                                          >> "$TF"
+
+        sudo --login -u $user bash --rcfile "$TF"
+
+        rm -f "$TF"
+        echo -e "\nClosing $proto:${port}"
+        closeHole
+    fi
+
+elif [ c = "$action" ]
+then
+    closeHole
+else
+    echo -e "\nUnknown action: $action\n"
+    exit 1
+fi
+

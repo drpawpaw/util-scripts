@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Author: drpawpaw - 201?
+
+# Passively monitors the local NTP server.
+
+for d in ntpq sed watch
+do
+    if ! which $d &>/dev/null
+    then
+        echo "${0##*/} depends on ${d}. Didn't find ${d}" >&2
+        exit 1
+    fi
+done
+
+polling_cmds=$( mktemp )
+
+echo "#!/bin/dash
+ntpq -np
+echo -n \$( stat -c %y /var/lib/ntp/ntp.drift | sed -r 's/\\..*//' )' '
+echo -n '/var/lib/ntp/ntp.drift: '
+cat /var/lib/ntp/ntp.drift
+" > "$polling_cmds"
+
+chmod 700 "$polling_cmds"
+
+watch -et -n 180 "$polling_cmds"
+

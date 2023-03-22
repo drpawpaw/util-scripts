@@ -1,0 +1,126 @@
+#!/bin/dash
+
+# Author: drpawpaw - 2023
+
+# Prints the source of a list of Linux scripts by line count ascending,
+# prefixing each script's source with a page break and title line, suffixing
+# each with a finish line.
+
+# Written on Feb. 22, 2023 as part of extending script dice-applyable-jobs.
+
+HOME_BIN="$HOME/bin"
+HOME_SYS="$HOME/bin/sys-admin"
+
+CODE_SAMPLES="
+$HOME_SYS/ntp-watch
+$HOME_BIN/title
+$HOME_BIN/backup-timestamp
+$HOME_BIN/prime-random
+$HOME_BIN/cp-to-ssh-hosts
+$HOME_BIN/passwd-gen
+$HOME_SYS/apt-get-source-files
+$HOME_SYS/mac-random
+$HOME_BIN/unknown-uncompress
+$HOME_BIN/code-samples-gen
+$HOME_SYS/service-start-stop
+$HOME_SYS/process-stop
+$HOME_SYS/zzz-logrotate-audit
+$HOME_SYS/linux-config-01-hardware-clock
+$HOME_SYS/is-dns-available
+$HOME_BIN/execute-dependencies
+$HOME_SYS/video-low-bytes-stream
+$HOME_BIN/tinyp
+$HOME_BIN/ssh-key-pair-gen
+$HOME_SYS/crypt-drive-mount-toggle
+$HOME_BIN/chrome-runner
+$HOME_BIN/dice-applyable-jobs
+"
+
+if test -d "$1"
+then
+    CODE_SAMPLES=$( find "$1" -maxdepth 1 -executable -type f )
+fi
+
+
+#max=17 i=0
+sort_keys=""
+IFS='
+'
+for s in $CODE_SAMPLES
+do
+    if ! test -f "$s" -a -r "$s"
+    then
+        echo "\nWARN: Can't access '$s'"
+        continue
+    fi
+    l=$( sed -r '/^\s*$/d' < "$s" | wc -l )
+    sort_keys="${sort_keys}\n$l $s"
+
+#    i=$( expr $i + 1 )
+#    [ $i -ge $max ] && break
+done
+CODE_SAMPLES=$( echo "$sort_keys" | sort -n | sed -r 's/^[0-9]+ +//' )
+
+# ^L = form feed / page break (Vim: insert mode -> Ctrl+V -> Ctrl+L)
+echo "BEGIN Code Samples ☺"
+
+echo "\nSource code for these scripts is below:"
+
+echo "$CODE_SAMPLES" | sed -r 's:^.*/::' | sed -r 's/^/    /'
+
+echo "\nTo find one search: BEGIN {script title}"
+
+echo "\nTo run one replace its first line, dash/bash shebang," \
+     "with the needed one."
+
+echo "\nIf you find a bug, please send me the details."
+
+echo "\nMost of the tools used in the scripts:\n"
+
+for s in $CODE_SAMPLES
+do
+    echo "$s" 1>&2
+    sudo "$HOME_BIN"/execute-dependencies -c "$s" 2>/dev/null
+
+done | tr ' ' '\n' | \
+       grep -v "$HOME" |
+       sed -r 's:^/.*/::' | \
+       sort -u | \
+       # False positive tool finds; I don't use these in any of the scripts.
+       # See execute-dependencies' intro comments.
+       egrep -v '^(as|dir|file|from|host|info|last|link)$' | \
+       egrep -v '^(login|make|man|script|size|su|top|write|yes)$' | \
+       tr '\n' ' ' | \
+       sed -r 's/^\s*//'
+echo
+
+#i=0
+b=0 l=0 total_bytes=0 total_lines=0 scripts_count=0
+
+for s in $CODE_SAMPLES
+do
+    b=$( stat -c %s "$s" )
+    l=$( sed -r '/^\s*$/d' < "$s" | wc -l )
+    echo "########## BEGIN ${s##*/} :" \
+         "$b bytes," \
+         "$l lines ##########\n"
+
+    # 1st sed here else page breaks occur in the text of this script in code
+    # sample files in which it includes itself. The 1st '^L' is an actual
+    # page break char, the 2nd is just the string "^L".
+    cat "$s" | sed -r 's//^L/' | \
+               sed -r 's/^\s*#\s*!.*((d|b)ash).*$/\1 shebang/'
+
+    echo "########## END ${s##*/} ##########"
+
+    total_bytes=$( expr $b + $total_bytes )
+    total_lines=$( expr $l + $total_lines )
+    scripts_count=$( expr 1 + $scripts_count )
+#    i=$( expr $i + 1 )
+#    [ $i -ge $max ] && break
+done
+
+echo "\nEND Code Samples ☺ : $scripts_count scripts,"\
+     "$total_bytes bytes, $total_lines lines"
+
+
