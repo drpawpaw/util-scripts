@@ -224,7 +224,8 @@ function isSafeToShredAndNull
 
 
 # Do not suffix dirs with '/' or '*', nor both.
-declare -r configFilesToNull="$configToRun/BrowserMetrics-*
+declare -r configFilesToNull="$configToRun/Avatars
+$configToRun/BrowserMetrics-*
 $configToRun/BrowserMetrics/BrowserMetrics-*
 $configToRun/Default/.org.chromium.Chromium.*
 $configToRun/Default/Cookies-journal
