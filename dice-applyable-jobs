@@ -10,7 +10,7 @@
 # I'm guessing 75+% of it will convert as-is to other employment search sites.
 
 
-for d in code-samples-gen wmctrl xvkbd
+for d in wmctrl xvkbd
 do
     if ! which $d >/dev/null 2>&1
     then
@@ -384,35 +384,6 @@ createOpportunityNotesFile ()
 }
 
 
-prepareOpportunityDocuments ()
-{
-    applicationInProgress && return
-    haveAlreadyApplied && return
-
-    createOpportunityDirectory
-    createCoverLetter
-    addOportunitySpecificInfoToCoverLetter
-    createOpportunityNotesFile
-
-    separatorLine
-    echo -e "\n$ ls -l ${opp[dir]}"
-    ls -l ${opp[dir]}
-
-    libre-office-runner d "${opp[notes]}" &>/dev/null &
-    libre-office-runner d "${opp[cover]}" &>/dev/null &
-}
-
-
-toAlphaDigitDash ()
-{
-    echo "$1" | sed -r 's/^\s*//' | \
-                sed -r 's/\s*$//' | \
-                sed -r 's/\s\s\s*/ /g' | \
-                tr -dc ' [:alpha:][:digit:]' | \
-                tr ' ' '-'
-}
-
-
 createOrganizationDirAndInfoFile ()
 {
     local org_name=$( toAlphaDigitDash "${opp[org]}" )
@@ -433,12 +404,43 @@ createOrganizationDirAndInfoFile ()
         echo -e "\nls -ltr '${opp[org_dir]}'"
         ls -lt "${opp[org_dir]}"
     fi
+    opp[org_info]="$org_info"
+}
+
+
+prepareOpportunityDocuments ()
+{
+    applicationInProgress && return
+    haveAlreadyApplied && return
+
+    createOpportunityDirectory
+    createCoverLetter
+    addOportunitySpecificInfoToCoverLetter
+    createOpportunityNotesFile
+    createOrganizationDirAndInfoFile
+
+    separatorLine
+    echo -e "\n$ ls -l ${opp[dir]}"
+    ls -l ${opp[dir]}
+
+    gvim "${opp[org_info]}" &>/dev/null &
+    gvim "${opp[notes]}" &>/dev/null &
+    libre-office-runner d "${opp[cover]}" &>/dev/null &
+}
+
+
+toAlphaDigitDash ()
+{
+    echo "$1" | sed -r 's/^\s*//' | \
+                sed -r 's/\s*$//' | \
+                sed -r 's/\s\s\s*/ /g' | \
+                tr -dc ' [:alpha:][:digit:]' | \
+                tr ' ' '-'
 }
 
 
 moveOppDirToSubmitedDir ()
 {
-    createOrganizationDirAndInfoFile
     echo
     mv -v "${opp[dir]}" "${opp[org_dir]}"
 
@@ -449,7 +451,6 @@ moveOppDirToSubmitedDir ()
 
 moveOppDirToInProgressDir ()
 {
-    createOrganizationDirAndInfoFile
     echo
     mv -v "${opp[dir]}" "$OPPS_IN_PROGRESS"
 }
@@ -459,13 +460,6 @@ deleteOppDir ()
 {
     echo
     rm -vrf "${opp[dir]}"
-}
-
-
-deleteOppDirButSaveOrganizationInfo ()
-{
-    deleteOppDir
-    createOrganizationDirAndInfoFile
 }
 
 
@@ -480,7 +474,6 @@ moveOpportunityDirectory ()
     local action=""
     select action in moveOppDirToSubmitedDir \
                      moveOppDirToInProgressDir \
-                     deleteOppDirButSaveOrganizationInfo \
                      deleteOppDir
     do
         [ -n "$action" ] && break
@@ -630,7 +623,7 @@ for l in $( cat "$search_html_file" |
             sed -r 's/href="/\n/g' |
             egrep  '^ *https:' |
             egrep 'https:\/\/' |
-            egrep  "$oppUrlType" ) # ⇒ "applyable" opportunities ★
+            egrep  "$oppUrlType" )
 do
     echo -e "\n-------------------------------------------------------------"
 
