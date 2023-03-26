@@ -130,6 +130,39 @@ separatorLine ()
 }
 
 
+openOpportunityInATab ()
+{
+    if ! wmctrl -l | egrep -i "^$diceChromeX" &>/dev/null
+    then
+        echo -e "\nFAIL: Can't find Chrome window $diceChromeX"
+        exit 1
+    fi
+
+    echo -e "\nRaising window. Be patient for search to start."
+    sleep 0.2
+
+    wmctrl -i -R "$diceChromeX"    # raise window and give it focus
+
+    # open new tab in browser
+    sleep 0.4
+    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Ct'
+
+    # give location bar the focus
+    sleep 0.4
+    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Cl'
+
+    # write opportunity URL into location bar
+    sleep 0.4
+    xvkbd -window "$diceChromeX" \
+          -no-jump-pointer -no-sync -text "${opp[url]}"
+
+    # GET opp URL
+    sleep 0.25
+    xvkbd -window "$diceChromeX" \
+          -no-jump-pointer -no-sync -text "\r"
+}
+
+
 scrollToOpportunityInSearchResultsPage ()
 {
     if ! wmctrl -l | egrep -i "^$diceChromeX" &>/dev/null
@@ -441,6 +474,7 @@ toAlphaDigitDash ()
 
 moveOppDirToSubmitedDir ()
 {
+    separatorLine
     echo
     mv -v "${opp[dir]}" "${opp[org_dir]}"
 
@@ -451,6 +485,7 @@ moveOppDirToSubmitedDir ()
 
 moveOppDirToInProgressDir ()
 {
+    separatorLine
     echo
     mv -v "${opp[dir]}" "$OPPS_IN_PROGRESS"
 }
@@ -458,8 +493,17 @@ moveOppDirToInProgressDir ()
 
 deleteOppDir ()
 {
+    separatorLine
     echo
     rm -vrf "${opp[dir]}"
+}
+
+
+leaveItInTheOppDir ()
+{
+    separatorLine
+    echo -e "\n$ ls -l ${opp[dir]}"
+    ls -l "${opp[dir]}"
 }
 
 
@@ -474,7 +518,8 @@ moveOpportunityDirectory ()
     local action=""
     select action in moveOppDirToSubmitedDir \
                      moveOppDirToInProgressDir \
-                     deleteOppDir
+                     deleteOppDir \
+                     leaveItInTheOppDir
     do
         [ -n "$action" ] && break
     done
@@ -564,14 +609,15 @@ evaluateOpportunity ()
     fi
 
     local whatToDo=""
-    while ! egrep '^[isl]$' <<< "$whatToDo" &>/dev/null
+    while ! egrep '^[isol]$' <<< "$whatToDo" &>/dev/null
     do
         echo -e "\n    ${opp[title]} - ${opp[org]}"
         echo -e "        i : ignore forever" \
                 "\n        s : skip for now" \
+                "\n        o : open opporunity it its own tab" \
                 "\n        l : scroll to it in search results page\n"
         whatToDo=""
-        read -erp " i / s / l ? " whatToDo
+        read -erp " i / s / o / l ? " whatToDo
     done
 
     if [ 's' = "$whatToDo" ]
@@ -581,6 +627,11 @@ evaluateOpportunity ()
     elif [ 'i' = "$whatToDo" ]
     then
         ignoreForever
+
+    elif [ 'o' = "$whatToDo" ]
+    then
+        openOpportunityInATab
+        postViewingActions
 
     elif [ 'l' = "$whatToDo" ]
     then
