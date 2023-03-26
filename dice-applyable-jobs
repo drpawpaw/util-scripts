@@ -107,6 +107,7 @@ ensureExists ()
 
 declare -r EMPL_DIR="$HOME/Documents/employment"
 declare -r IGNORE_FOREVER="$EMPL_DIR/search/dice/ignore.db"
+declare -r IGNORE_ORGANIZATION="$EMPL_DIR/search/dice/ignore-org.db"
 declare -r OP_PAGE="$EMPL_DIR/search/dice/search-results/op-page"
 declare -r COVER_TEMPLATES="$EMPL_DIR/cover-letter-templates"
 declare -r GREETINGS="$COVER_TEMPLATES/greetings.db"
@@ -116,6 +117,7 @@ declare -r SUBMITTED_DIR="$OPPS_DIR/submitted"
 
 ensureExists dir "$EMPL_DIR"
 ensureExists file "$IGNORE_FOREVER"
+ensureExists file "$IGNORE_ORGANIZATION"
 ensureExists dir "$OP_PAGE"
 ensureExists dir "$COVER_TEMPLATES"
 ensureExists file "$GREETINGS"
@@ -199,6 +201,16 @@ ignoreForever ()
 {
     echo -e "\nIgnoring ${opp[id]}	${opp[title]}	${opp[org]}"
     echo "${opp[id]}	${opp[title]}	${opp[org]}" >> "$IGNORE_FOREVER"
+}
+
+
+addOrgToIgnoreOrgsDB ()
+{
+    echo -e "\nEnter reason(s) for ignoring '${opp[org]}':"
+    REPLY=""
+    read -er
+    echo -e "\nIgnoring ${opp[org]}	$REPLY"
+    echo "${opp[org]}	$REPLY" >> "$IGNORE_ORGANIZATION"
 }
 
 
@@ -551,16 +563,17 @@ cleanUpOpporunityHtmlDirectory ()
 postViewingActions ()
 {
     local whatToDo=""
-    while ! egrep '^[isa]$' <<< "$whatToDo" &>/dev/null
+    while ! egrep '^[ioas]$' <<< "$whatToDo" &>/dev/null
     do
         echo -e "\nAfter reviewing"
         echo -e "\n\t${opp[title]} - ${opp[org]}"
         echo -e "\nwhat would you like to do?"
         echo -e "        i : ignore forever" \
-                "\n        s : skip for now" \
-                "\n        a : apply for the opportunity\n"
+                "\n        o : ignore forever and add org to ignore orgs DB" \
+                "\n        a : apply for the opportunity" \
+                "\n        s : skip for now\n"
         whatToDo=""
-        read -erp " i / s / a ? " whatToDo
+        read -erp " i / o / a / s ? " whatToDo
     done
 
     if [ 's' = "$whatToDo" ]
@@ -570,6 +583,11 @@ postViewingActions ()
     elif [ 'i' = "$whatToDo" ]
     then
         ignoreForever
+
+    elif [ 'o' = "$whatToDo" ]
+    then
+        ignoreForever
+        addOrgToIgnoreOrgsDB
 
     elif [ 'a' = "$whatToDo" ]
     then
@@ -603,9 +621,23 @@ evaluateOpportunity ()
 
     if egrep "^${opp[id]}" "$IGNORE_FOREVER" &>/dev/null
     then
-       echo -en "\nIgnoring "
-       egrep "^${opp[id]}" "$IGNORE_FOREVER"
-       return
+        echo -en "\nIgnoring "
+        egrep "^ *${opp[id]}" "$IGNORE_FOREVER"
+        return
+    fi
+
+    if egrep "^ *${opp[org]}" "$IGNORE_ORGANIZATION" &>/dev/null
+    then
+        echo
+        echo -e "NOTE: ${opp[org]} is in ignore DB:"
+        echo -en "\a"
+        sleep 0.33
+        echo -en "\a"
+        sleep 0.33
+        echo -en "\a"
+        sleep 0.33
+        echo -en "\a\n\t"
+        egrep "^ *${opp[org]}" "$IGNORE_ORGANIZATION"
     fi
 
     local whatToDo=""
