@@ -28,12 +28,13 @@ function cleanUp
 
 
 userHome=$( cat /etc/passwd | grep -E "^$SUDO_USER:" | cut -d : -f6 )
-TF=$( sudo -u $SUDO_USER mktemp )
+TF=$( mktemp )
 echo ". $userHome/.bashrc"                              > "$TF"
 echo "PS1='\n$SUDO_USER ${0##*/} \$( pwd )\nssh:22> '" >> "$TF"
 echo "echo -e '\033]2;'ssh:22 ${0##*/}'\007'"          >> "$TF"
 echo "cd $PWD"                                         >> "$TF"
 echo "env | grep SSH"                                  >> "$TF"
+chmod o+r "$TF"
 
 # Do NOT launch iptbls-hole as sudo, because if done AND this script is
 # also launched as sudo, then SUDO_USER within iptbls-hole is root!

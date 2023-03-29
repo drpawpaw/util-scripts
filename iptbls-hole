@@ -289,11 +289,12 @@ then
     if $startShell
     then
         userHome=$( cat /etc/passwd | grep -E "^$user:" | cut -d : -f6 )
-        TF=$( sudo -u $user mktemp )
+        TF=$( mktemp )
         echo ". $userHome/.bashrc"                               > "$TF"
         echo "PS1='\n$user ${0##*/} \$( pwd )\n$proto:$port> '" >> "$TF"
         echo "echo -e '\033]2;'$proto:$port ${0##*/}'\007'"     >> "$TF"
         echo "cd $PWD"                                          >> "$TF"
+        chmod o+r "$TF"
 
         sudo --login -u $user bash --rcfile "$TF"
 
