@@ -4,6 +4,8 @@
 
 # Passively monitors the local NTP server.
 
+echo -e '\033]2;'ntp'\007'
+
 for d in ntpq sed watch
 do
     if ! which $d &>/dev/null

@@ -201,6 +201,17 @@ fi
 confirmNotAlreadyRunning "$configToRun"
 
 
+confirmGoolgeSessionRunsAlone ()
+{
+    echo "TODO Google sessions"
+    # TODO: If configToRun is Google, and other sessions are running:
+    #              exit with error message.
+    #       Else if configToRun is not Google, check that a Google one is not
+#            running. If a google session is running, exit with erromr msg.
+}
+confirmGoolgeSessionRunsAlone
+
+
 # Deleting JSON file 'Local State' causes chrome to claim your Preferences
 # file is corrupt (it's likely not) and to refuse to load it.
 DO_NOT_DELETE='\/('
