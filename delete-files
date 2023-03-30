@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# drpawpaw - 2023 - Prompts you to delete or not-delete, individually, files
+#                   or dirs below a start-dir (resursively) whose names match
+#                   a passed in regex.
+
+start_dir="$1"
+file_type="$2"
+regx="$3"
+
+if [ ! -d "$start_dir" ] || \
+   [ ! -r "$start_dir" ] || \
+   [ ! -w "$start_dir" ] || \
+   [ ! -x "$start_dir" ] || \
+   ! echo "$file_type" | egrep '^[fd]$' >/dev/null 2>&1 || \
+   [ -z "$regx" ]
+then
+    echo -e \
+       "\nUsage: $ ${0##*/} {start dir} {f|d} {regex of files/dirs to delete}"
+fi
+
+ft="file"
+[ 'd' = "$file_type" ] && ft=dir
+
+echo -e "\nSearching all dirs below $start_dir ..."
+
+for f in $( find "$start_dir" -type $file_type -name "$regx" 2>/dev/null )
+do
+    REPLY=""
+    echo -e "\nDelete $ft $f"
+    read -erp " (y/n) ? "
+
+    if [ 'y' = "$REPLY" ]
+    then
+        if [ 'f' = "$file_type" ]
+        then
+            rm -vf "$f"
+
+        elif [ 'd' = "$file_type" ]
+        then
+            rm -vrf "$f"
+
+        else
+            echo "Unknown file type: '$file_type'"
+            exit 1
+        fi
+    fi
+done
+
