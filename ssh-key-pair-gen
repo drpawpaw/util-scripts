@@ -237,6 +237,7 @@ Host $remote_host_nickname
     User $ssh_user
     IdentitiesOnly yes
     IdentityFile $ssh_dir/$key_file
+    AddKeysToAgent ask
     ServerAliveInterval 60
 "
 
