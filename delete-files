@@ -24,10 +24,11 @@ ft="file"
 
 echo -e "\nSearching all dirs below $start_dir ..."
 
+IFS=$'\n'
 for f in $( find "$start_dir" -type $file_type -name "$regx" 2>/dev/null )
 do
     REPLY=""
-    echo -e "\nDelete $ft $f"
+    echo -e "\nDelete $ft '$f'"
     read -erp " (y/n) ? "
 
     if [ 'y' = "$REPLY" ]
