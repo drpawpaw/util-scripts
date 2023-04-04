@@ -31,7 +31,7 @@ function cleanUp
 
 
 userHome=$( cat /etc/passwd | grep -E "^$SUDO_USER:" | cut -d : -f6 )
-TF=$( sudo -u $SUDO_USER mktemp )
+TF=$( mktemp )
 echo ". $userHome/.bashrc"                                > "$TF"
 echo "PS1='\n$SUDO_USER ${0##*/} \$( pwd )\nwhois:43> '" >> "$TF"
 echo "echo -e '\033]2;'whois:43 ${0##*/}'\007'"          >> "$TF"
@@ -39,6 +39,7 @@ echo "cd $PWD"                                           >> "$TF"
 echo "export WHOIS_OPTIONS=\"-h $WHOIS_SERVER\""         >> "$TF"
 echo "export WHOIS_SERVER=\"$WHOIS_SERVER\""             >> "$TF"
 echo "env | grep WHOIS"                                  >> "$TF"
+chmod o+r "$TF"
 
 # Do NOT launch iptbls-hole as sudo, because if done AND this script is
 # also launched as sudo, then SUDO_USER within iptbls-hole is root!
