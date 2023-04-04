@@ -34,23 +34,23 @@ declare -r search_html_file="$2"
 
 
 if ! ps -ef | egrep -im 1 \
-       "^$(whoami).*chromium.* --user-data-dir=.*chrome-runner/dice( |$)" \
+       "^$(whoami).*firefox.* --profile .*\.mozilla/firefox/dice( |$)" \
                                                                    &>/dev/null
 then
-    echo -e "\nNo Chrome instance running as '$(whoami)' with Dice" \
+    echo -e "\nNo firefox instance running as '$(whoami)' with Dice" \
             "config. Start one, log in to Dice, re-start this script."
     exit 1
 fi
 
-echo -e "\nSelect the Dice Chrome window to use:\n"
+echo -e "\nSelect the Dice Firefox window to use:\n"
 IFS=$'\n'
-select diceChromeX in $( wmctrl -l | egrep -i ' - Chromium' )
+select diceFirefoxX in $( wmctrl -l | egrep ' Mozilla Firefox' )
 do
-    [ -n "$diceChromeX" ] && break
+    [ -n "$diceFirefoxX" ] && break
 done
-[ -z "$diceChromeX" ] && \
-                        echo -e "\nMust select a Dice Chrome window" && exit 1
-diceChromeX=$( cut -f1 -d ' ' <<< "$diceChromeX" )
+[ -z "$diceFirefoxX" ] && \
+                        echo -e "\nMust select a Dice Firefox window" && exit 1
+diceFirefoxX=$( cut -f1 -d ' ' <<< "$diceFirefoxX" )
 
 
 ensureExists ()
@@ -134,42 +134,42 @@ separatorLine ()
 
 openOpportunityInATab ()
 {
-    if ! wmctrl -l | egrep -i "^$diceChromeX" &>/dev/null
+    if ! wmctrl -l | egrep -i "^$diceFirefoxX" &>/dev/null
     then
-        echo -e "\nFAIL: Can't find Chrome window $diceChromeX"
+        echo -e "\nFAIL: Can't find Firefox window $diceFirefoxX"
         exit 1
     fi
 
     echo -e "\nRaising window. Be patient for search to start."
     sleep 0.2
 
-    wmctrl -i -R "$diceChromeX"    # raise window and give it focus
+    wmctrl -i -R "$diceFirefoxX"    # raise window and give it focus
 
     # open new tab in browser
     sleep 0.4
-    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Ct'
+    xvkbd -window "$diceFirefoxX" -no-jump-pointer -no-sync -text '\Ct'
 
     # give location bar the focus
     sleep 0.4
-    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Cl'
+    xvkbd -window "$diceFirefoxX" -no-jump-pointer -no-sync -text '\Cl'
 
     # write opportunity URL into location bar
     sleep 0.4
-    xvkbd -window "$diceChromeX" \
+    xvkbd -window "$diceFirefoxX" \
           -no-jump-pointer -no-sync -text "${opp[url]}"
 
     # GET opp URL
     sleep 0.25
-    xvkbd -window "$diceChromeX" \
+    xvkbd -window "$diceFirefoxX" \
           -no-jump-pointer -no-sync -text "\r"
 }
 
 
 scrollToOpportunityInSearchResultsPage ()
 {
-    if ! wmctrl -l | egrep -i "^$diceChromeX" &>/dev/null
+    if ! wmctrl -l | egrep -i "^$diceFirefoxX" &>/dev/null
     then
-        echo -e "\nFAIL: Can't find Chrome window $diceChromeX"
+        echo -e "\nFAIL: Can't find Firefox window $diceFirefoxX"
         exit 1
     fi
 
@@ -184,15 +184,15 @@ scrollToOpportunityInSearchResultsPage ()
     sleep 0.5
 
 
-    wmctrl -i -R "$diceChromeX"    # raise window and give it focus
+    wmctrl -i -R "$diceFirefoxX"    # raise window and give it focus
 
     # open page search box, give it focus
     sleep 1.41
-    xvkbd -window "$diceChromeX" -no-jump-pointer -no-sync -text '\Cf'
+    xvkbd -window "$diceFirefoxX" -no-jump-pointer -no-sync -text '\Cf'
 
     # write text to search into search box
     sleep 0.77
-    xvkbd -window "$diceChromeX" \
+    xvkbd -window "$diceFirefoxX" \
           -no-jump-pointer -no-sync -text "$search_string"
 }
 
@@ -248,20 +248,13 @@ createOpportunityDirectory ()
 
     local opDir="${orgName}_${opTitle}_${opp[id]}"
 
-    echo -e "\nUse (u) opportunity dir title '$opDir' or change (c) it? "
+    echo -e "\nChange opportunity dir title '$opDir' ?"
     REPLY=""
-    while ! egrep '^[uc]$' <<< "$REPLY" &>/dev/null
-    do
-        read -erp "(u/c)? "
-    done
-    if [ 'c' = "$REPLY" ]
+    read -erp "<Enter> nothing to use the generated one: "
+    if [ -n "$REPLY" ]
     then
-        opDir=""
-        while [ -z "$opDir" ]
-        do
-            echo -e "\nCover title: $opDir\n"
-            read -erp "Enter new opp dir title: " opDir
-        done
+        opDir="$REPLY"
+        echo -e "\nChanged opp dir name to '$opDir'"
     fi
     opDir="$OPPS_DIR/$opDir"
     ensureExists dir "$opDir"
@@ -291,20 +284,13 @@ createCoverLetter ()
     local -r name=$( toAlphaDigitDash "$user_name" )
     local cover="${name}_${opTitle}_${orgName}.odt"
 
-    echo -e "\nUse (u) cover letter title '$cover' or change (c) it? "
+    echo -e "\nChage cover letter '$cover' title?"
     REPLY=""
-    while ! egrep '^[uc]$' <<< "$REPLY" &>/dev/null
-    do
-        read -erp "(u/c)? "
-    done
-    if [ 'c' = "$REPLY" ]
+    read -erp "<Enter> nothing to use the generated one: "
+    if [ -n "$REPLY" ]
     then
-        cover=""
-        while [ -z "$cover" ]
-        do
-            echo -e "\nCover title: $cover\n"
-            read -erp "Enter new cover letter title: " cover
-        done
+        cover="$REPLY"
+        echo -e "\nChanged cover title: $cover"
     fi
     cover="${opp[dir]}/$cover"
     opp[cover]="$cover"
@@ -640,6 +626,15 @@ evaluateOpportunity ()
         egrep "^ *${opp[org]}" "$IGNORE_ORGANIZATION"
     fi
 
+    local org=$( toAlphaDigitDash "${opp[org]}" )
+    local org_info=$( find "$SUBMITTED_DIR" -type f -name "${org}"'*.info' )
+    if [ -f "$org_info" ]
+    then
+        echo -e "\n$org_info"
+        gvim "$org_info"
+        local org_pid="$?"
+    fi
+
     local whatToDo=""
     while ! egrep '^[isol]$' <<< "$whatToDo" &>/dev/null
     do
@@ -651,6 +646,8 @@ evaluateOpportunity ()
         whatToDo=""
         read -erp " i / s / o / l ? " whatToDo
     done
+
+    [ -n "$org_pid" ] && echo && kill -s SIGINT $org_pid
 
     if [ 's' = "$whatToDo" ]
     then
@@ -698,6 +695,16 @@ else
 fi
 
 
+# DEBUG
+#cat "$search_html_file" #| \
+#            sed -r 's/\s\s\s*/ /g' | \
+#            sed -r '/^\s*$/d' | \
+#            sed -r 's/href="/\n/g' | \
+#            egrep  '^ *https:' | \
+#            egrep 'https:\/\/' | \
+#            egrep  "$oppUrlType"
+#exit 1
+
 declare -A opp=()
 IFS=$'\n'
 for l in $( cat "$search_html_file" |
@@ -709,6 +716,7 @@ for l in $( cat "$search_html_file" |
             egrep  "$oppUrlType" )
 do
     echo -e "\n-------------------------------------------------------------"
+    echo -e "\n$l"
 
     opp=()
 
@@ -747,8 +755,15 @@ do
     if [ -z "${opp[url]}" ] || [ -z "${opp[id]}" ] || \
        [ -z "${opp[org]}" ] || [ -z "${opp[title]}" ]
     then
-        echo -e "\nFAIL: Search results HTML parsing algo may need updated"
-        exit 1
+        echo -e "\nFAIL: Search results HTML parsing algo may need updated." \
+       "Failed to find all basic opp info for above URL:"
+       echo "opp[url]:   ${opp[url]}"
+       echo "opp[id]:    ${opp[id]}"
+       echo "opp[org]:   ${opp[org]}"
+       echo "opp[title]: ${opp[title]}"
+
+       read -erp "<Enter> to continue."
+       continue
     fi
 
     evaluateOpportunity
