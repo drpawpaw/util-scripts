@@ -631,8 +631,8 @@ evaluateOpportunity ()
     if [ -f "$org_info" ]
     then
         echo -e "\n$org_info"
-        gvim "$org_info"
-        local org_pid="$?"
+        gvim --nofork "$org_info" &
+        local org_pid="$( jobs -p )"       # should only be one job
     fi
 
     local whatToDo=""
@@ -647,7 +647,11 @@ evaluateOpportunity ()
         read -erp " i / s / o / l ? " whatToDo
     done
 
-    [ -n "$org_pid" ] && echo && kill -s SIGINT $org_pid
+    if [ -n "$org_pid" ]
+    then
+        echo -e "\nGvim org info pid: $org_pid"
+        kill -s SIGQUIT $org_pid
+    fi
 
     if [ 's' = "$whatToDo" ]
     then
